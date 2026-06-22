@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+*.pcap
+*.cap
+.DS_Store
+
+# local agent roster / Claude config - never tracked
+.claude/

@@ -1,0 +1,58 @@
+"""CAN protocol: SocketCAN frame codec + `can send`/`can dump` sugar over the core verbs.
+
+A CAN frame is injected/sniffed like any packet protocol, so the SAME commands drive the
+virtual bridge and the real socketcan backend. The on-wire/pcap representation is the
+classic 16-byte SocketCAN frame, and captures use DLT_CAN_SOCKETCAN (227) so tshark
+dissects them as CAN. This is the codec shared by both backends - the heart of the
+dual-purpose proof.
+"""
+
+from __future__ import annotations
+
+import struct
+
+from ..core.backend import Backend
+
+PROTOCOL = "can"
+PCAP_DLT = 227                      # LINKTYPE_CAN_SOCKETCAN
+FRAME_SIZE = 16                     # classic SocketCAN struct can_frame
+
+_CAN = struct.Struct("<IB3x8s")     # can_id|flags, dlc, 3 pad, data[8]
+CAN_EFF_FLAG = 0x80000000
+CAN_RTR_FLAG = 0x40000000
+CAN_SFF_MASK = 0x000007FF
+CAN_EFF_MASK = 0x1FFFFFFF
+
+
+def encode_frame(can_id: int, data: bytes, extended: bool = False) -> bytes:
+    extended = extended or can_id > CAN_SFF_MASK
+    raw_id = (can_id & (CAN_EFF_MASK if extended else CAN_SFF_MASK)) | (CAN_EFF_FLAG if extended else 0)
+    data = bytes(data)[:8]
+    return _CAN.pack(raw_id, len(data), data.ljust(8, b"\x00"))
+
+
+def decode_frame(raw: bytes) -> tuple[int, bytes, bool]:
+    if len(raw) < FRAME_SIZE:
+        raise ValueError(f"CAN frame too short: {len(raw)} bytes (need {FRAME_SIZE})")
+    raw_id, dlc, data = _CAN.unpack(raw[:FRAME_SIZE])
+    extended = bool(raw_id & CAN_EFF_FLAG)
+    can_id = raw_id & (CAN_EFF_MASK if extended else CAN_SFF_MASK)
+    return can_id, data[:dlc], extended
+
+
+def ids_seen(frames: list[bytes]) -> list[int]:
+    out: list[int] = []
+    for f in frames:
+        cid, _, _ = decode_frame(f)
+        if cid not in out:
+            out.append(cid)
+    return out
+
+
+# sugar over the core verbs (identical against virtual and socketcan)
+def send(backend: Backend, can_id: int, data_hex: str, extended: bool = False) -> None:
+    backend.inject(encode_frame(can_id, bytes.fromhex(data_hex), extended))
+
+
+def dump(backend: Backend, out_pcap: str, count=None, seconds=None) -> int:
+    return backend.sniff(out_pcap, count=count, seconds=seconds)

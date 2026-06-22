@@ -1,0 +1,33 @@
+[project]
+name = "espilon-probe"
+version = "0.1.0"
+description = "One CLI for the physical layer (RF + hardware buses), same commands in lab and on real hardware."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Espilon" }]
+keywords = ["security", "rf", "ble", "zigbee", "can", "uart", "hardware", "pentest", "sdr"]
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+    "Environment :: Console",
+]
+dependencies = []
+
+[project.scripts]
+probe = "espilon_probe.cli:main"
+
+[project.optional-dependencies]
+hci = []          # real BLE backend deps (later): bleak / dbus
+killerbee = []    # 802.15.4 backend deps (later)
+sdr = []          # SoapySDR backend deps (later)
+serial = []       # pyserial (later)
+dev = ["pytest"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
