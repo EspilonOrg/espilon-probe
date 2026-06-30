@@ -233,3 +233,51 @@ def test_replay_accepts_matching_dlt(tmp_path, capsys):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+# --- malformed-backend-response robustness + DLT source agreement (Sprint 2 audit) ---
+
+class _ScriptB:
+    def __init__(self, result):
+        self.result = result
+
+    def op(self, verb, **k):
+        return self.result
+
+
+def test_demod_null_result_is_clean_probe_error():
+    with pytest.raises(ProbeError) as ei:
+        subghz.demod(_ScriptB(None))           # explicit null result
+    assert "null result" in str(ei.value)
+
+
+def test_band_list_non_list_is_clean_probe_error():
+    with pytest.raises(ProbeError) as ei:
+        subghz.band_list(_ScriptB({"bands": "not-a-list"}))
+    assert "non-list bands" in str(ei.value)
+
+
+def test_band_list_drops_non_dict_rows():
+    rows = subghz.band_list(_ScriptB({"bands": [None, {"name": "433"}, 5]}))
+    assert rows == [{"name": "433"}]
+
+
+def test_sniff_refuses_when_bridge_omits_pcap_dlt(tmp_path, capsys):
+    # MINOR 2: sniff must refuse loud (agreeing with replay) when the bridge advertises no
+    # pcap_dlt, rather than silently writing a guessed DLT that its own replay would reject.
+    caps_no_dlt = {k: v for k, v in SUBGHZ_CAPS.items() if k != "pcap_dlt"}
+
+    def respond(msg):
+        if msg.get("t") == wire.SNIFF:
+            return {"t": wire.SNIFF_END, "count": 0}
+        return None
+
+    srv, port = serve_mock(caps_no_dlt, respond)
+    try:
+        with pytest.raises(SystemExit) as ei:
+            _run(["sniff", "-w", str(tmp_path / "x.pcap"), "-c", "1"], port, capsys)
+        assert str(ei.value).startswith("probe:")
+        assert "pcap_dlt" in str(ei.value)
+    finally:
+        srv.shutdown()
+        srv.server_close()

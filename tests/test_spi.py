@@ -156,3 +156,45 @@ def test_spi_dump_length_ceiling_refused():
     with pytest.raises(ProbeError) as ei:
         spi.dump(_B(), spi.DUMP_MAX_BYTES + 1, "/tmp/should-not-write.bin")
     assert "exceeds the client ceiling" in str(ei.value)
+
+
+# --- malformed-backend-response robustness (Sprint 2 audit repros) ---
+
+class _ScriptB:
+    def __init__(self, result):
+        self.result = result
+
+    def op(self, verb, **k):
+        return self.result
+
+
+def test_scan_rows_null_result_is_clean_probe_error():
+    from espilon_probe.protocols import spi
+    with pytest.raises(ProbeError) as ei:
+        spi.scan_rows(_ScriptB(None))          # explicit null result, not a missing key
+    assert "null result" in str(ei.value)
+
+
+def test_scan_rows_non_numeric_jedec_is_clean_probe_error():
+    from espilon_probe.protocols import spi
+    # A non-int, non-str jedec_id (a list) must refuse clean, not traceback in the formatter.
+    with pytest.raises(ProbeError) as ei:
+        spi.scan_rows(_ScriptB({"jedec_id": [1, 2, 3], "name": "x"}))
+    assert "non-numeric jedec_id" in str(ei.value)
+
+
+def test_cli_spi_id_null_result_exits_clean(capsys):
+    def respond(msg):
+        if msg.get("t") == wire.OP and msg.get("verb") == "spi.id":
+            return {"t": wire.OP_RESULT, "result": None}
+        return wire.error("unhandled")
+
+    srv, port = serve_mock(SPI_CAPS, respond)
+    try:
+        with pytest.raises(SystemExit) as ei:
+            _run(["spi", "id"], port, capsys)
+        assert str(ei.value).startswith("probe:")
+        assert "null result" in str(ei.value)
+    finally:
+        srv.shutdown()
+        srv.server_close()

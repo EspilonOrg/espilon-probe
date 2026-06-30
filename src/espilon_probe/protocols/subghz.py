@@ -135,6 +135,19 @@ def decode_frame(raw: bytes) -> dict:
     return {"freq": freq, "mod": mod_name(code), "rate": rate, "payload": payload}
 
 
+def _result(backend: Backend, verb: str, **kwargs) -> dict:
+    """Call `op()` and guarantee a dict result (see jtag._result for the rationale).
+
+    A null or non-dict result is a clean `ProbeError`, never an AttributeError from `.get()`.
+    """
+    res = backend.op(verb, **kwargs)
+    if res is None:
+        raise ProbeError(f"backend returned a null result for {verb}")
+    if not isinstance(res, dict):
+        raise ProbeError(f"backend returned a non-object result for {verb}: {res!r}")
+    return res
+
+
 # named protocol verbs (HINTS only; used by the CLI dispatch and by tests/scripts)
 def demod(backend: Backend, capture: str | None = None) -> dict:
     """A modulation/bitrate/encoding HINT for a capture the operator already has.
@@ -143,9 +156,20 @@ def demod(backend: Backend, capture: str | None = None) -> dict:
     or recover a flag (the conventions forbid building a solver into the client).
     """
     if capture is None:
-        return backend.op("subghz.demod")
-    return backend.op("subghz.demod", capture=capture)
+        return _result(backend, "subghz.demod")
+    return _result(backend, "subghz.demod", capture=capture)
+
+
+def band_list(backend: Backend) -> list[dict]:
+    """The advertised ISM bands, defensively normalized: a non-list `bands` is a clean
+    `ProbeError` and non-dict rows are skipped, so the CLI display never tracebacks."""
+    raw = _result(backend, "subghz.bands").get("bands", [])
+    if raw is None:
+        raw = []
+    if not isinstance(raw, list):
+        raise ProbeError(f"backend returned non-list bands {raw!r}")
+    return [band for band in raw if isinstance(band, dict)]
 
 
 def bands(backend: Backend) -> dict:
-    return backend.op("subghz.bands")
+    return _result(backend, "subghz.bands")

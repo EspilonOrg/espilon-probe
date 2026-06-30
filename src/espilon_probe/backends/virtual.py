@@ -136,7 +136,16 @@ class VirtualBackend(Backend):
         else:
             timeout = SNIFF_COUNT_ONLY_TIMEOUT
 
-        dlt = self._caps.get("pcap_dlt", 147)   # 147 = LINKTYPE_USER0 fallback
+        # The capture's DLT must come from the bridge's advertised `pcap_dlt`. A silent
+        # fallback here would write a capture under a guessed link type that `replay` (which
+        # refuses loud when `pcap_dlt` is absent) would then reject, so a misconfigured bridge
+        # produced a capture it could not replay. Refuse loud instead, agreeing with replay.
+        dlt = self._caps.get("pcap_dlt")
+        if dlt is None:
+            from ..core.errors import ProbeError
+            raise ProbeError(
+                "bridge did not advertise a pcap link type (pcap_dlt); refusing to write a "
+                "capture under a guessed DLT that replay would reject")
         wire.send(self._w, {"t": wire.SNIFF, "count": count, "seconds": seconds,
                             "channel": channel})
         start = time.monotonic()

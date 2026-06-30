@@ -355,27 +355,29 @@ def _build_inject(b, args) -> tuple[bytes, int | None]:
 
 def _dispatch_jtag(args, b) -> None:
     from .protocols import jtag
+    from .core.fields import as_int
     cmd = args.jtag_cmd
     if cmd == "scan-chain":
-        for tap in jtag.scan_chain(b).get("taps", []):
-            print(f"[{tap.get('index', 0)}] idcode=0x{int(tap.get('idcode', 0)):08x}  "
-                  f"irlen={tap.get('irlen', '')}  {tap.get('name', '')}".rstrip())
+        for tap in jtag.taps(b):           # already coerced + malformed rows dropped
+            print(f"[{tap['index']}] idcode=0x{tap['idcode']:08x}  "
+                  f"irlen={tap['irlen']}  {tap['name']}".rstrip())
     elif cmd == "idcode":
         r = jtag.idcode(b, tap=args.tap)
-        print(f"idcode=0x{int(r.get('idcode', 0)):08x}  "
+        print(f"idcode=0x{as_int(r.get('idcode', 0), 'idcode'):08x}  "
               f"mfg={r.get('manufacturer', '')}  part={r.get('part', '')}  "
               f"name={r.get('name', '')}")
     elif cmd == "halt":
         r = jtag.halt(b, tap=args.tap)
         pc = r.get("pc")
-        print(f"state={r.get('state', '')}" + (f"  pc=0x{int(pc):08x}" if pc is not None else ""))
+        print(f"state={r.get('state', '')}"
+              + (f"  pc=0x{as_int(pc, 'pc'):08x}" if pc is not None else ""))
     elif cmd == "resume":
         addr = _parse_int(args.addr, "address") if args.addr is not None else None
         print(f"state={jtag.resume(b, tap=args.tap, addr=addr).get('state', '')}")
     elif cmd == "read":
         addr = _parse_int(args.addr, "address")
-        for i, w in enumerate(jtag.read(b, addr, words=args.words).get("words", [])):
-            print(f"0x{addr + i * 4:08x}: 0x{int(w):08x}")
+        for i, w in enumerate(jtag.read_words(b, addr, count=args.words)):
+            print(f"0x{addr + i * 4:08x}: 0x{w:08x}")
     elif cmd == "write":
         addr = _parse_int(args.addr, "address")
         word = _parse_int(args.word, "word")
@@ -383,11 +385,12 @@ def _dispatch_jtag(args, b) -> None:
         print("ok" if r.get("ok") else str(r))
     elif cmd == "reg":
         r = jtag.reg(b, name=args.name)
-        if "regs" in r:
-            for name, val in r["regs"].items():
-                print(f"{name} = 0x{int(val):08x}")
+        regs = r.get("regs")
+        if isinstance(regs, dict):
+            for name, val in regs.items():
+                print(f"{name} = 0x{as_int(val, f'reg {name}'):08x}")
         else:
-            print(f"{r.get('name', '')} = 0x{int(r.get('value', 0)):08x}")
+            print(f"{r.get('name', '')} = 0x{as_int(r.get('value', 0), 'reg value'):08x}")
     elif cmd == "dump":
         addr = _parse_int(args.addr, "address")
         length = _parse_int(args.len, "length")
@@ -400,9 +403,10 @@ def _dispatch_spi(args, b) -> None:
     from .protocols import spi
     cmd = args.spi_cmd
     if cmd == "id":
+        from .core.fields import as_int
         r = spi.device_id(b, cs=args.cs)
         jedec = r.get("jedec_id", 0)
-        jedec_s = jedec if isinstance(jedec, str) else f"0x{int(jedec):06x}"
+        jedec_s = jedec if isinstance(jedec, str) else f"0x{as_int(jedec, 'jedec_id'):06x}"
         print(f"jedec={jedec_s}  mfg={r.get('manufacturer', '')}  "
               f"capacity={r.get('capacity', '')}  name={r.get('name', '')}")
     elif cmd == "read":
@@ -438,7 +442,7 @@ def _dispatch_subghz(args, b) -> None:
         print(f"modulation={r.get('modulation', '')}  bitrate={r.get('bitrate', '')}  "
               f"encoding={r.get('encoding', '')}  confidence={r.get('guess_conf', '')}")
     elif cmd == "bands":
-        for band in subghz.bands(b).get("bands", []):
+        for band in subghz.band_list(b):           # coerced; non-dict rows dropped
             print(f"{band.get('name', '')}: {band.get('lo', '')}..{band.get('hi', '')} Hz  "
                   f"default={band.get('default', '')}")
 
@@ -468,7 +472,12 @@ def main(argv: list[str] | None = None) -> int:
         # A backend that defensively refused a verb the gate did not catch. Render clean.
         verb = str(e) or "operation"
         raise SystemExit(f"probe: '{verb}' is not supported by this backend")
-    except (ProbeError, wire.ProtocolError, RuntimeError, OSError, ValueError) as e:
+    except (ProbeError, wire.ProtocolError, RuntimeError, OSError, ValueError,
+            AttributeError, TypeError, KeyError) as e:
+        # AttributeError/TypeError/KeyError are a backstop: a malformed backend response is
+        # partly attacker-influenced on a lab bridge, and the protocol layer must already
+        # refuse it cleanly. If any future path still lets a malformed dict through, it
+        # surfaces here as a clean `probe: ...` line, never a raw traceback.
         raise SystemExit(f"probe: {e}")
     finally:
         backend.close()

@@ -24,6 +24,7 @@ import struct
 
 from ..core.backend import Backend
 from ..core.errors import ProbeError
+from ..core.fields import as_int
 from ..core.frame import DLT_USER_PROBE_SPI, PcapWriter
 from ..core.wire import Frame
 
@@ -46,41 +47,69 @@ _OP_XFER = 5
 _SPI_REC = struct.Struct("<BBHIHH")     # op, cs, flags, addr, mosi_len, miso_len
 
 
+def _hex_bytes(value, field: str) -> bytes:
+    """Coerce a backend hex string to bytes, or raise a clean `ProbeError`.
+
+    A non-string, or a string that is not valid hex, is refused with a field-named message
+    instead of leaking a bare `ValueError`/`TypeError` from `bytes.fromhex`."""
+    if not isinstance(value, str):
+        raise ProbeError(f"backend returned non-string {field}: {value!r}")
+    try:
+        return bytes.fromhex(value)
+    except ValueError:
+        raise ProbeError(f"backend returned malformed hex for {field}: {value!r}")
+
+
+def _result(backend: Backend, verb: str, **kwargs) -> dict:
+    """Call `op()` and guarantee a dict result (see jtag._result for the rationale).
+
+    A null or non-dict result is a clean `ProbeError`, never an AttributeError from `.get()`.
+    """
+    res = backend.op(verb, **kwargs)
+    if res is None:
+        raise ProbeError(f"backend returned a null result for {verb}")
+    if not isinstance(res, dict):
+        raise ProbeError(f"backend returned a non-object result for {verb}: {res!r}")
+    return res
+
+
 # named transactions (used by the CLI dispatch and by tests/scripts)
 def device_id(backend: Backend, cs: int = 0) -> dict:
-    return backend.op("spi.id", cs=cs)
+    return _result(backend, "spi.id", cs=cs)
 
 
 def read(backend: Backend, addr: int, length: int, cs: int = 0) -> dict:
-    return backend.op("spi.read", addr=addr, len=length, cs=cs)
+    return _result(backend, "spi.read", addr=addr, len=length, cs=cs)
 
 
 def write(backend: Backend, addr: int, data_hex: str, cs: int = 0) -> dict:
-    return backend.op("spi.write", addr=addr, data=data_hex, cs=cs)
+    return _result(backend, "spi.write", addr=addr, data=data_hex, cs=cs)
 
 
 def reg(backend: Backend, name: str, value_hex: str | None = None, cs: int = 0) -> dict:
     if value_hex is None:
-        return backend.op("spi.reg", name=name, cs=cs)
-    return backend.op("spi.reg", name=name, value=value_hex, cs=cs)
+        return _result(backend, "spi.reg", name=name, cs=cs)
+    return _result(backend, "spi.reg", name=name, value=value_hex, cs=cs)
 
 
 def xfer(backend: Backend, mosi_hex: str, cs: int = 0) -> dict:
-    return backend.op("spi.xfer", mosi=mosi_hex, cs=cs)
+    return _result(backend, "spi.xfer", mosi=mosi_hex, cs=cs)
 
 
 def scan_rows(backend: Backend, cs: int = 0) -> list[dict]:
     """`probe scan` = `probe spi id` flattened into the generic scan row shape.
 
     The device becomes `{name, addr=jedec_id}` so the generic core verb and the protocol
-    verb both surface the same enumeration.
+    verb both surface the same enumeration. A `jedec_id` is rendered as a 24-bit hex string;
+    a string `jedec_id` is accepted verbatim (a legitimate display form), but any other
+    non-int/non-str type is a clean `ProbeError` rather than a formatting traceback.
     """
     info = device_id(backend, cs=cs)
     jedec = info.get("jedec_id", 0)
     if isinstance(jedec, str):
         addr = jedec
     else:
-        addr = f"0x{int(jedec):06x}"
+        addr = f"0x{as_int(jedec, 'jedec_id'):06x}"
     return [{"name": info.get("name", ""), "addr": addr, "cs": cs}]
 
 
@@ -112,7 +141,7 @@ def dump(backend: Backend, length: int, out_path: str, addr: int = 0,
             while remaining > 0:
                 n = min(_READ_CHUNK_BYTES, remaining)
                 res = read(backend, cur, n, cs=cs)
-                blob = bytes.fromhex(res.get("data", ""))
+                blob = _hex_bytes(res.get("data", ""), f"spi.read data at 0x{cur:06x}")
                 if len(blob) != n:
                     raise ProbeError(
                         f"spi dump: backend returned {len(blob)} bytes, expected {n} at "

@@ -6,6 +6,43 @@ these become the commit messages.
 
 ---
 
+## 020 - fix(protocols): crash-proof the transaction-scan + transaction-result paths
+
+Sprint 2 audit BLOCKER: a malformed backend response could leak a raw Python traceback
+(AttributeError/TypeError), violating the "no traceback on hostile input" contract this sprint
+exists to honor. On a lab bridge the player partly controls these responses, so it was a real
+parser-robustness hole. Fixed on the same branch.
+
+BLOCKER - crash-proof the transaction paths:
+- `core/fields.py` (new): `as_int`/`as_int_list` - the single sound place that coerces a
+  backend numeric/list field or refuses with a field-named `ProbeError` (rejects bool/float/
+  None/unparseable-string/non-list), instead of letting `int()`/`.get()` leak their own text.
+- `protocols/jtag.py`: a `_result()` wrapper refuses a null or non-dict `op()` result (the wire
+  carries JSON null, which `virtual.op`'s `.get("result", {})` passes through as None). New
+  `taps()` normalizes a `taps` that is None/non-list (clean refusal) and skips null/non-dict
+  rows, coercing idcode/index via `as_int`; `scan_rows`/`read_words`/`dump` go through it.
+- `protocols/spi.py`, `protocols/subghz.py`: same `_result()` guard; `spi` adds `_hex_bytes`
+  (a non-string / bad-hex `data` refuses clean); `subghz.band_list` refuses a non-list `bands`
+  and drops non-dict rows.
+- `cli.py`: the dispatch loops now use the coerced helpers (`jtag.taps`, `jtag.read_words`,
+  `subghz.band_list`, `as_int` on idcode/pc/reg/jedec). `main()` catch list gains
+  `AttributeError, TypeError, KeyError` as a backstop so no future malformed dict from any
+  protocol can leak a stack trace.
+
+MINOR 1 - numeric backend fields validate in the protocol layer: a string idcode/word/jedec
+that is not a valid number raises a protocol-level `ProbeError` ("backend returned non-numeric
+idcode ...") instead of a bare "invalid literal for int()".
+
+MINOR 2 - sniff/replay DLT source agreement: `backends/virtual.py::sniff` no longer falls back
+to a silent DLT 147 when the bridge omits `pcap_dlt`; it refuses loud (`ProbeError`), agreeing
+with `replay` so a misconfigured bridge cannot produce a capture its own replay then rejects.
+
+Tests: pinned the reviewer's repros - None/dict/null taps, an explicit null result, a string
+idcode, a string word, a non-list bands, sniff-without-pcap_dlt - plus `test_fields.py` for
+the coercion helpers and the cli.main backstop. Suite: 104 passed, 1 skipped (was 80/1).
+
+Contract note (deferred per reviewer): `--band` stays a client-side filter for v1.
+
 ## 019 - feat(protocols): sprint 2 - JTAG, SPI, sub-GHz virtual protocols
 
 Three new protocols implemented exactly to the architect's specs

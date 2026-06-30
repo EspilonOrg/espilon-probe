@@ -24,6 +24,7 @@ import struct
 
 from ..core.backend import Backend
 from ..core.errors import ProbeError
+from ..core.fields import as_int, as_int_list
 from ..core.frame import DLT_USER_PROBE_JTAG, PcapWriter
 from ..core.wire import Frame
 
@@ -48,61 +49,108 @@ _OP_REG = 7
 _JTAG_REC = struct.Struct("<BBHIIHH")   # op, tap, flags, addr, value, count, payload_len
 
 
+def _result(backend: Backend, verb: str, **kwargs) -> dict:
+    """Call `op()` and guarantee a dict result.
+
+    A backend may return an explicit null result (the wire carries JSON null, and
+    `virtual.op`'s `.get("result", {})` only defaults a MISSING key, not an explicit None), or
+    some other non-dict. The protocol layer must never `.get()` on a non-dict, so we coerce a
+    non-dict result to a clean `ProbeError` rather than leak an AttributeError.
+    """
+    res = backend.op(verb, **kwargs)
+    if res is None:
+        raise ProbeError(f"backend returned a null result for {verb}")
+    if not isinstance(res, dict):
+        raise ProbeError(f"backend returned a non-object result for {verb}: {res!r}")
+    return res
+
+
 # named transactions (used by the CLI dispatch and by tests/scripts)
 def scan_chain(backend: Backend) -> dict:
-    return backend.op("jtag.scan_chain")
+    return _result(backend, "jtag.scan_chain")
+
+
+def taps(backend: Backend) -> list[dict]:
+    """The scan-chain TAP list, defensively normalized for display/flattening.
+
+    `scan_chain` may come back with `taps` missing, null, or a non-list (e.g. a dict), and
+    individual rows may be null or non-dict. None of that may traceback: a non-list `taps` is
+    a clean `ProbeError`, and non-dict rows are skipped (we do not invent fields for a row we
+    cannot read). Each surviving row's `idcode`/`index` is coerced via `as_int`.
+    """
+    raw_taps = scan_chain(backend).get("taps", [])
+    if raw_taps is None:
+        raw_taps = []
+    if not isinstance(raw_taps, list):
+        raise ProbeError(f"backend returned non-list taps {raw_taps!r}")
+    out: list[dict] = []
+    for tap in raw_taps:
+        if not isinstance(tap, dict):
+            continue                    # skip a malformed row rather than crash on .get()
+        out.append({
+            "index": as_int(tap.get("index", 0), "tap index"),
+            "idcode": as_int(tap.get("idcode", 0), "idcode"),
+            "irlen": tap.get("irlen", ""),
+            "name": tap.get("name", ""),
+        })
+    return out
 
 
 def idcode(backend: Backend, tap: int = 0) -> dict:
-    return backend.op("jtag.idcode", tap=tap)
+    return _result(backend, "jtag.idcode", tap=tap)
 
 
 def halt(backend: Backend, tap: int = 0) -> dict:
-    return backend.op("jtag.halt", tap=tap)
+    return _result(backend, "jtag.halt", tap=tap)
 
 
 def resume(backend: Backend, tap: int = 0, addr: int | None = None) -> dict:
     args: dict = {"tap": tap}
     if addr is not None:
         args["addr"] = addr
-    return backend.op("jtag.resume", **args)
+    return _result(backend, "jtag.resume", **args)
 
 
 def read(backend: Backend, addr: int, words: int = 1) -> dict:
-    return backend.op("jtag.read", addr=addr, words=words)
+    return _result(backend, "jtag.read", addr=addr, words=words)
+
+
+def read_words(backend: Backend, addr: int, count: int = 1) -> list[int]:
+    """A `jtag.read` returning its `words` coerced to ints (a string word raises ProbeError)."""
+    return as_int_list(read(backend, addr, words=count).get("words", []), "word")
 
 
 def write(backend: Backend, addr: int, word: int) -> dict:
-    return backend.op("jtag.write", addr=addr, word=word)
+    return _result(backend, "jtag.write", addr=addr, word=word)
 
 
 def reg(backend: Backend, name: str | None = None) -> dict:
     if name is None:
-        return backend.op("jtag.reg")
-    return backend.op("jtag.reg", name=name)
+        return _result(backend, "jtag.reg")
+    return _result(backend, "jtag.reg", name=name)
 
 
 def scan_rows(backend: Backend) -> list[dict]:
     """`probe scan` = `probe jtag scan-chain` flattened into the generic scan row shape.
 
     Each TAP becomes `{name, addr=idcode, index}` so the generic core verb and the protocol
-    verb both surface the same chain enumeration.
+    verb both surface the same chain enumeration. The `taps()` helper has already coerced the
+    backend fields and dropped malformed rows, so this never tracebacks on a hostile response.
     """
-    taps = scan_chain(backend).get("taps", [])
     rows: list[dict] = []
-    for tap in taps:
+    for tap in taps(backend):
         rows.append({
-            "name": tap.get("name", ""),
-            "addr": f"0x{int(tap.get('idcode', 0)):08x}",
-            "index": tap.get("index", 0),
+            "name": tap["name"],
+            "addr": f"0x{tap['idcode']:08x}",
+            "index": tap["index"],
         })
     return rows
 
 
-def _words_to_bytes(words: list[int]) -> bytes:
+def _words_to_bytes(words) -> bytes:
     out = bytearray()
-    for w in words:
-        out += struct.pack("<I", int(w) & 0xFFFFFFFF)
+    for w in as_int_list(words, "word"):
+        out += struct.pack("<I", w & 0xFFFFFFFF)
     return bytes(out)
 
 
@@ -138,8 +186,7 @@ def dump(backend: Backend, addr: int, length: int, out_path: str,
             remaining = total_words
             while remaining > 0:
                 n = min(_READ_CHUNK_WORDS, remaining)
-                res = read(backend, cur, words=n)
-                words = res.get("words", [])
+                words = as_int_list(read(backend, cur, words=n).get("words", []), "word")
                 if len(words) != n:
                     raise ProbeError(
                         f"jtag dump: backend returned {len(words)} words, expected {n} at "
@@ -158,9 +205,12 @@ def dump(backend: Backend, addr: int, length: int, out_path: str,
 
 
 def _read_record(addr: int, words: list[int]) -> Frame:
-    """One DLT_USER_PROBE_JTAG transaction record for a `jtag.read` response."""
+    """One DLT_USER_PROBE_JTAG transaction record for a `jtag.read` response.
+
+    `words` is already coerced to a list of ints by the dump loop before it reaches here.
+    """
     payload = _words_to_bytes(words)
-    first = int(words[0]) & 0xFFFFFFFF if words else 0
+    first = (words[0] & 0xFFFFFFFF) if words else 0
     flags = 0x0001                      # bit0 = response
     header = _JTAG_REC.pack(_OP_READ, 0, flags, addr & 0xFFFFFFFF, first,
                             len(words) & 0xFFFF, len(payload) & 0xFFFF)

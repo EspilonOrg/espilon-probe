@@ -169,3 +169,64 @@ def test_jtag_dump_non_word_length_refused():
     with pytest.raises(ProbeError) as ei:
         jtag.dump(_B(), 0, 3, "/tmp/should-not-write.bin")
     assert "not a multiple" in str(ei.value)
+
+
+# --- malformed-backend-response robustness (Sprint 2 audit repros) ---
+
+class _ScriptB:
+    """A backend whose `op()` returns a fixed, deliberately-malformed result."""
+    def __init__(self, result):
+        self.result = result
+
+    def op(self, verb, **k):
+        return self.result
+
+
+@pytest.mark.parametrize("result, note", [
+    ({"taps": [None]}, "null tap row is skipped, not .get()'d"),
+    ({"taps": {"x": 1}}, "dict (non-list) taps refused clean"),
+    ({"taps": None}, "null taps coerced to empty"),
+    (None, "explicit null result (not just a missing key)"),
+])
+def test_scan_rows_survives_malformed_taps(result, note):
+    from espilon_probe.protocols import jtag
+    try:
+        rows = jtag.scan_rows(_ScriptB(result))
+        assert isinstance(rows, list)          # coerced to a clean (possibly empty) list
+    except ProbeError:
+        pass                                   # or a clean refusal - never a raw traceback
+    except (AttributeError, TypeError) as e:   # the bug this pins: must NOT happen
+        raise AssertionError(f"raw {type(e).__name__} leaked ({note}): {e}")
+
+
+def test_scan_rows_non_numeric_idcode_is_clean_probe_error():
+    from espilon_probe.protocols import jtag
+    with pytest.raises(ProbeError) as ei:
+        jtag.scan_rows(_ScriptB({"taps": [{"idcode": "GARBAGE", "name": "x"}]}))
+    assert "non-numeric idcode" in str(ei.value)
+
+
+def test_read_words_string_word_is_clean_probe_error():
+    from espilon_probe.protocols import jtag
+    with pytest.raises(ProbeError) as ei:
+        jtag.read_words(_ScriptB({"words": ["not-a-number"]}), 0, 1)
+    assert "non-numeric word" in str(ei.value)
+
+
+def test_cli_scan_chain_null_result_exits_clean(capsys):
+    # End-to-end: a bridge returning an explicit null result for scan_chain must yield a clean
+    # `probe: ...` exit, never a stack trace (the backstop + protocol coercion together).
+    def respond(msg):
+        if msg.get("t") == wire.OP and msg.get("verb") == "jtag.scan_chain":
+            return {"t": wire.OP_RESULT, "result": None}
+        return wire.error("unhandled")
+
+    srv, port = serve_mock(JTAG_CAPS, respond)
+    try:
+        with pytest.raises(SystemExit) as ei:
+            _run(["jtag", "scan-chain"], port, capsys)
+        assert str(ei.value).startswith("probe:")
+        assert "null result" in str(ei.value)
+    finally:
+        srv.shutdown()
+        srv.server_close()
