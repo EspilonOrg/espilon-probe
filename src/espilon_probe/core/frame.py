@@ -3,7 +3,7 @@ the operator analyses with their own tools (tshark, wireshark, zbdsniff, crackle
 
 Classic pcap format (not pcapng): a 24-byte global header then per-packet records. The
 linktype (DLT) is set per protocol, e.g. 256 = LINKTYPE_BLUETOOTH_LE_LL_WITH_PHDR for BLE,
-215 = LINKTYPE_IEEE802_15_4_WITHFCS for Zigbee. Frames whose raw bytes are properly
+195 = LINKTYPE_IEEE802_15_4_WITHFCS for Zigbee. Frames whose raw bytes are properly
 layered for that DLT dissect cleanly; the pcap container itself is protocol-agnostic.
 """
 
@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import struct
 
+from .errors import ProbeError
 from .wire import Frame   # re-export the single Frame type
 
-__all__ = ["Frame", "PcapWriter", "read_pcap"]
+__all__ = ["Frame", "PcapWriter", "read_pcap", "read_pcap_for_replay"]
 
 _MAGIC_LE = 0xA1B2C3D4
 # classic pcap magics -> byte order ("<" LE, ">" BE), microsecond and nanosecond variants
@@ -72,3 +73,26 @@ def read_pcap(path: str) -> tuple[int, list[bytes]]:
                 break
             frames.append(data)
     return linktype, frames
+
+
+def read_pcap_for_replay(path: str, expected_dlt: int | None) -> list[bytes]:
+    """Read a pcap for replay, validating its DLT against the active protocol (convention C4).
+
+    `expected_dlt` is the active protocol's `PCAP_DLT`. Replaying a capture taken on a
+    different link type (e.g. an 802.15.4 pcap onto a CAN bus) blasts cross-protocol bytes
+    onto the wire, so this is refused with a `ProbeError`.
+
+    This guard is conservative by design: it refuses unless the pcap's DLT is known to match.
+    If the active protocol does not declare a DLT (`expected_dlt is None`) we cannot
+    authoritatively decide the capture belongs here, so we refuse loud rather than guess.
+    """
+    if expected_dlt is None:
+        raise ProbeError(
+            "cannot validate replay: the active protocol declares no pcap DLT, refusing to "
+            "replay an unverifiable capture")
+    dlt, frames = read_pcap(path)
+    if dlt != expected_dlt:
+        raise ProbeError(
+            f"pcap link type {dlt} does not match the active protocol's link type "
+            f"{expected_dlt}; refusing to replay a cross-protocol capture")
+    return frames

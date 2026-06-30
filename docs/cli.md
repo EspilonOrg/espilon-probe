@@ -16,12 +16,17 @@ probe --backend openocd   jtag halt
 ## Core verbs (every protocol)
 
 ```
-probe info                               # backend, protocol, channels, capabilities
+probe info                               # backend, protocol, shape, channels, capabilities
 probe scan                               # what is on the protocol
 probe sniff -w cap.pcap [-c N] [-t S] [--channel C]   # capture to standard pcap
-probe inject --hex DEADBEEF | -r frame.bin
-probe replay -r cap.pcap [--filter '...']
+probe inject --hex DEADBEEF | -r frame.bin [--channel C]
+probe replay -r cap.pcap
 ```
+
+`sniff` is always bounded client-side: pass `-c`/`-t` to set the bound; if you give neither,
+a default ceiling (30s) applies rather than capturing forever. `replay` refuses a pcap whose
+link type does not match the active protocol (no cross-protocol replay). A verb a protocol
+does not advertise (see `info`) is refused cleanly, not run.
 
 ## Protocol verbs (offered when the backend advertises them)
 
@@ -46,7 +51,8 @@ probe uart open ...
 probe sniff -w zb.pcap -t 60
 zbdsniff zb.pcap                         # recover key (stock)
 tshark -r zb.pcap ...                    # dissect / decrypt (stock)
-probe replay -r zb.pcap --filter 'zbee_aps.cluster==0x0006'
+tshark -r zb.pcap -Y 'zbee_aps.cluster==0x0006' -w filtered.pcap   # pre-filter (stock)
+probe replay -r filtered.pcap            # replay the filtered capture
 ```
 
 ## Translation from native tools

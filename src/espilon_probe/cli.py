@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import argparse
 
+from .core import wire
+from .core.errors import ProbeError
+
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="probe", description="One CLI for the physical layer.")
@@ -27,7 +30,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("info", help="show backend, protocol, channels, capabilities")
     sub.add_parser("scan", help="enumerate what is on the protocol")
 
-    sn = sub.add_parser("sniff", help="capture frames to a standard pcap")
+    sn = sub.add_parser("sniff",
+                        help="capture frames to a standard pcap "
+                             "(client-bounded; default ceiling 30s if no -c/-t given)")
     sn.add_argument("-w", "--write", required=True, metavar="PCAP")
     sn.add_argument("-c", "--count", type=int)
     sn.add_argument("-t", "--seconds", type=float)
@@ -37,6 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     g = inj.add_mutually_exclusive_group(required=True)
     g.add_argument("--hex")
     g.add_argument("-r", "--read", metavar="FRAME")
+    inj.add_argument("--channel", type=int, help="channel to transmit on (protocols that support it)")
 
     rp = sub.add_parser("replay", help="re-transmit frames from a pcap (pre-filter with tshark -w)")
     rp.add_argument("-r", "--read", required=True, metavar="PCAP")
@@ -47,7 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     gr = gs.add_parser("read", help="read a characteristic")
     gr.add_argument("handle", help="handle (e.g. 0x0011) or uuid")
     gw = gs.add_parser("write", help="write a characteristic")
-    gw.add_argument("handle", help="handle (e.g. 0x0014)")
+    gw.add_argument("handle", help="handle (e.g. 0x0014) or uuid (e.g. fff2)")
     gw.add_argument("value", help="hex value (e.g. 01)")
 
     cn = sub.add_parser("can", help="CAN bus operations")
@@ -92,12 +98,47 @@ def _fmt_value(hexstr: str) -> str:
     return raw.hex()
 
 
+# CLI verb -> the top-level capability verb it requires. `info` is never gated: it is the
+# operator-visible gate display itself. `can`/`gatt`/`uart` map to their group name, matching
+# how those verbs appear in `capabilities().verbs`.
+_VERB_REQUIRES = {
+    "scan": "scan",
+    "sniff": "sniff",
+    "inject": "inject",
+    "replay": "replay",
+    "gatt": "gatt",
+    "uart": "uart",
+}
+# `can` is sugar over the core verbs (send -> inject, dump -> sniff), so its sub-commands
+# gate on the underlying core verb rather than a "can" group that backends do not advertise.
+_CAN_REQUIRES = {"send": "inject", "dump": "sniff"}
+
+
+def _require_verb(caps, verb: str) -> None:
+    """Hard-error clean if `verb` is not advertised by the protocol's capabilities.
+
+    This is the single capability gate (convention C1). It runs BEFORE any protocol verb is
+    routed, so an unsupported verb is a clean `ProbeError`, never a traceback from a backend
+    that does not implement it.
+    """
+    if verb not in caps.verbs:
+        supported = ", ".join(caps.verbs) or "(none)"
+        raise ProbeError(
+            f"'{verb}' is not supported on protocol '{caps.protocol}' (supported: {supported})")
+
+
 def _dispatch(args, b) -> int:
     from .protocols import ble
     v = args.verb
+    if v == "can":
+        required = _CAN_REQUIRES.get(args.can_cmd)
+    else:
+        required = _VERB_REQUIRES.get(v)
+    if required is not None:
+        _require_verb(b.capabilities(), required)
     if v == "info":
         c = b.capabilities()
-        print(f"backend: {c.transport}   protocol: {c.protocol}   "
+        print(f"backend: {c.transport}   protocol: {c.protocol}   shape: {c.shape}   "
               f"channels: {','.join(map(str, c.channels))}   verbs: {','.join(c.verbs)}")
     elif v == "scan":
         items = b.scan()
@@ -118,7 +159,7 @@ def _dispatch(args, b) -> int:
         else:
             with open(args.read, "rb") as fh:
                 frame = fh.read()
-        b.inject(frame)
+        b.inject(frame, channel=args.channel)
         print("injected")
     elif v == "replay":
         print(f"replayed {b.replay(args.read)} frame(s)")
@@ -176,7 +217,11 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"probe: cannot connect: {e}")
     try:
         return _dispatch(args, backend)
-    except (RuntimeError, OSError, ValueError) as e:
+    except NotImplementedError as e:
+        # A backend that defensively refused a verb the gate did not catch. Render clean.
+        verb = str(e) or "operation"
+        raise SystemExit(f"probe: '{verb}' is not supported by this backend")
+    except (ProbeError, wire.ProtocolError, RuntimeError, OSError, ValueError) as e:
         raise SystemExit(f"probe: {e}")
     finally:
         backend.close()

@@ -9,9 +9,18 @@ from __future__ import annotations
 
 import os
 import socket
+import time
 
 from ..core import wire
 from ..core.backend import Backend, Capabilities
+
+# Hard client-side ceiling for a sniff when the operator gives neither count nor seconds.
+# The tool always stops on its own; it never trusts the bridge to end a capture.
+SNIFF_DEFAULT_SECONDS = 30.0
+# Wall-clock guard so a wedged/never-ending bridge can never hang the client. It is the
+# requested duration plus a small margin, or a fixed ceiling when only `count` was given.
+SNIFF_COUNT_ONLY_TIMEOUT = 60.0
+SNIFF_TIMEOUT_MARGIN = 5.0
 
 
 class VirtualBackend(Backend):
@@ -74,7 +83,7 @@ class VirtualBackend(Backend):
         c = self._caps
         return Capabilities(protocol=c.get("protocol", ""), transport="virtual",
                             channels=c.get("channels", []), verbs=c.get("verbs", []),
-                            meta=c.get("meta", {}))
+                            shape=c.get("shape", "packet"), meta=c.get("meta", {}))
 
     def _txn(self, msg: dict) -> dict:
         wire.send(self._w, msg)
@@ -96,21 +105,60 @@ class VirtualBackend(Backend):
 
     def replay(self, in_pcap: str, frame_filter: str | None = None) -> int:
         """Re-transmit every frame in a pcap. Filter with stock tools (tshark -w) BEFORE
-        replay and pass the filtered pcap; we deliberately do not reimplement a filter."""
-        from ..core.frame import read_pcap
-        _dlt, frames = read_pcap(in_pcap)
+        replay and pass the filtered pcap; we deliberately do not reimplement a filter.
+
+        The pcap's DLT is validated against the active protocol's DLT (convention C4): a
+        cross-protocol capture is refused, not blasted onto the wire."""
+        from ..core.frame import read_pcap_for_replay
+        frames = read_pcap_for_replay(in_pcap, self._caps.get("pcap_dlt"))
         r = self._txn({"t": wire.REPLAY, "frames": [f.hex() for f in frames]})
         return r.get("count", 0)
 
     def sniff(self, out_pcap: str, count=None, seconds=None, channel=None) -> int:
+        """Capture frames to a pcap, BOUNDED entirely client-side.
+
+        The tool stops on its own and never trusts the bridge to end the capture:
+          - if neither `count` nor `seconds` is given, a default ceiling applies
+            (`SNIFF_DEFAULT_SECONDS`) instead of capturing unbounded;
+          - the read loop stops at `frames_read >= count` OR elapsed >= `seconds` OR
+            elapsed >= a hard wall-clock `timeout`, whichever fires first;
+          - each recv carries a socket timeout derived from the remaining budget, so a
+            bridge that simply stops sending frames cannot wedge the client.
+        After the bound is reached the client stops reading regardless of further frames.
+        """
         from ..core.frame import PcapWriter
+
+        if count is None and seconds is None:
+            seconds = SNIFF_DEFAULT_SECONDS
+        # Hard wall-clock guard, always finite, even in the count-only case.
+        if seconds is not None:
+            timeout = seconds + SNIFF_TIMEOUT_MARGIN
+        else:
+            timeout = SNIFF_COUNT_ONLY_TIMEOUT
+
         dlt = self._caps.get("pcap_dlt", 147)   # 147 = LINKTYPE_USER0 fallback
         wire.send(self._w, {"t": wire.SNIFF, "count": count, "seconds": seconds,
                             "channel": channel})
+        start = time.monotonic()
         n = 0
         with PcapWriter(out_pcap, dlt) as pw:
             while True:
-                m = wire.recv(self._r)
+                elapsed = time.monotonic() - start
+                if count is not None and n >= count:
+                    break
+                if seconds is not None and elapsed >= seconds:
+                    break
+                if elapsed >= timeout:
+                    break
+                # Bound this single recv so the client never blocks past the budget.
+                remaining = timeout - elapsed
+                if seconds is not None:
+                    remaining = min(remaining, seconds - elapsed)
+                self._sock.settimeout(max(0.0, remaining))
+                try:
+                    m = wire.recv(self._r)
+                except (socket.timeout, OSError):
+                    break
                 if m is None:
                     break
                 t = m.get("t")
@@ -121,4 +169,13 @@ class VirtualBackend(Backend):
                     break
                 elif t == wire.ERROR:
                     raise RuntimeError(m.get("msg", "error"))
+        # Best-effort: tell the bridge to stop, then clear the read timeout.
+        try:
+            wire.send(self._w, {"t": wire.SNIFF_END, "count": n})
+        except OSError:
+            pass
+        try:
+            self._sock.settimeout(None)
+        except OSError:
+            pass
         return n

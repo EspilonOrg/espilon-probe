@@ -32,9 +32,19 @@ def encode_frame(can_id: int, data: bytes, extended: bool = False) -> bytes:
 
 
 def decode_frame(raw: bytes) -> tuple[int, bytes, bool]:
+    # A classic SocketCAN frame is exactly FRAME_SIZE bytes. Accept a single frame of the
+    # right length; reject anything shorter, and reject a buffer that is not a whole number
+    # of frames rather than silently truncating trailing bytes.
     if len(raw) < FRAME_SIZE:
         raise ValueError(f"CAN frame too short: {len(raw)} bytes (need {FRAME_SIZE})")
-    raw_id, dlc, data = _CAN.unpack(raw[:FRAME_SIZE])
+    if len(raw) != FRAME_SIZE:
+        raise ValueError(
+            f"CAN frame wrong size: {len(raw)} bytes (a classic SocketCAN frame is {FRAME_SIZE})")
+    raw_id, dlc, data = _CAN.unpack(raw)
+    # DLC is the 4-bit data length; for classic CAN it must be 0..8. A larger value is an
+    # illegal/corrupt frame, not something to silently clamp.
+    if dlc > 8:
+        raise ValueError(f"illegal CAN DLC {dlc} (classic CAN data length must be 0..8)")
     extended = bool(raw_id & CAN_EFF_FLAG)
     can_id = raw_id & (CAN_EFF_MASK if extended else CAN_SFF_MASK)
     return can_id, data[:dlc], extended

@@ -13,6 +13,7 @@ import os
 import select
 
 from ..core.backend import Backend, Capabilities
+from ..core.errors import ProbeError
 
 
 class SerialBackend(Backend):
@@ -59,7 +60,8 @@ class SerialBackend(Backend):
 
     def capabilities(self) -> Capabilities:
         return Capabilities(protocol="uart", transport="serial", channels=[],
-                            verbs=["uart"], meta={"port": self.path, "baud": self.baud})
+                            verbs=["uart"], shape="stream",
+                            meta={"port": self.path, "baud": self.baud})
 
     def scan(self) -> list[dict]:
         return [{"port": self.path, "baud": self.baud}]
@@ -84,14 +86,16 @@ class SerialBackend(Backend):
                 buf += data
                 ready, _, _ = select.select([fd], [], [], 0.1)   # drain the rest
             return {"data": buf.hex()}
-        raise NotImplementedError(verb)
+        raise ProbeError(f"protocol verb '{verb}' is not supported on protocol 'uart'")
 
-    # UART is a byte stream, not packets; the packet verbs do not apply
+    # UART is a byte stream, not packets; the packet verbs do not apply. The CLI gate
+    # refuses these first (they are not in capabilities().verbs); refuse defensively here too
+    # with a clean operator-facing error rather than a bare NotImplementedError.
     def sniff(self, *a, **k) -> int:
-        raise NotImplementedError("UART is a byte stream; use uart read/write")
+        raise ProbeError("'sniff' is not supported on protocol 'uart' (a byte stream; use uart read)")
 
     def inject(self, *a, **k) -> None:
-        raise NotImplementedError("UART is a byte stream; use uart write")
+        raise ProbeError("'inject' is not supported on protocol 'uart' (a byte stream; use uart write)")
 
     def replay(self, *a, **k) -> int:
-        raise NotImplementedError("UART is a byte stream; use uart write")
+        raise ProbeError("'replay' is not supported on protocol 'uart' (a byte stream; use uart write)")

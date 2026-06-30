@@ -20,9 +20,25 @@ First release. A working generalist CLI and library for the physical layer.
 - Importable library API (`espilon_probe.backends`, `espilon_probe.protocols`,
   `espilon_probe.core`).
 - The wire protocol is documented as a public contract (`docs/wire-protocol.md`).
+- `Capabilities.shape` (`"packet"` | `"stream"` | `"transaction"`, default `"packet"`),
+  surfaced by `probe info`, so the CLI can reason about a protocol generically.
+- `inject --channel` to transmit on a specific channel where the protocol supports it.
 - GPL-3.0-or-later.
 
 ### Changed
+
+- `sniff` is now always bounded client-side: it stops at `-c`/`-t` and at a hard wall-clock
+  timeout, and applies a default 30s ceiling when neither is given (no more unbounded capture
+  that trusts the target to end the stream).
+- `replay` validates the input pcap's link type against the active protocol and refuses a
+  cross-protocol capture instead of transmitting foreign bytes.
+- Unsupported verbs and other expected failures now exit cleanly as `probe: <msg>` with a
+  nonzero status (never a traceback); a verb a protocol does not advertise is refused by the
+  capability gate before it is routed.
+- CAN frame decoding rejects an illegal data length (DLC > 8) and a wrong-sized buffer rather
+  than silently clamping or truncating.
+- BLE capture frames now carry the full LE_LL_WITH_PHDR layering for their declared link type
+  (256), so they dissect as `btatt.opcode` in stock tools.
 
 - Renamed the link-layer abstraction `medium` to `protocol` everywhere: the
   `espilon_probe.protocols` package (was `mediums`), `Capabilities.protocol`,

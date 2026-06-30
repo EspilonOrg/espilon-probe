@@ -12,7 +12,8 @@ import socket
 import time
 
 from ..core.backend import Backend, Capabilities
-from ..core.frame import Frame, PcapWriter, read_pcap
+from ..core.errors import ProbeError
+from ..core.frame import Frame, PcapWriter, read_pcap_for_replay
 
 FRAME_SIZE = 16
 
@@ -42,7 +43,7 @@ class SocketCanBackend(Backend):
     def capabilities(self) -> Capabilities:
         from ..protocols import can
         return Capabilities(protocol="can", transport="socketcan", channels=[],
-                            verbs=["scan", "sniff", "inject", "replay"],
+                            verbs=["scan", "sniff", "inject", "replay"], shape="packet",
                             meta={"iface": self.iface, "pcap_dlt": can.PCAP_DLT})
 
     def scan(self) -> list[dict]:
@@ -62,13 +63,16 @@ class SocketCanBackend(Backend):
         self._require_open().send(frame[:FRAME_SIZE].ljust(FRAME_SIZE, b"\x00"))
 
     def replay(self, in_pcap: str, frame_filter: str | None = None) -> int:
-        _dlt, frames = read_pcap(in_pcap)
+        from ..protocols import can
+        frames = read_pcap_for_replay(in_pcap, can.PCAP_DLT)   # C4: refuse cross-protocol pcaps
         for raw in frames:
             self.inject(raw)
         return len(frames)
 
     def op(self, verb: str, **kwargs) -> dict:
-        raise NotImplementedError(verb)
+        # CAN is a packet bus with no connection-oriented ops; the CLI gate refuses these
+        # first, but refuse defensively here too with a clean operator-facing error.
+        raise ProbeError(f"protocol verb '{verb}' is not supported on protocol 'can'")
 
     def _require_open(self) -> socket.socket:
         if self._sock is None:

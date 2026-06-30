@@ -56,3 +56,16 @@ def test_missing_type_is_rejected():
     except wire.ProtocolError:
         return
     raise AssertionError("expected ProtocolError for message without 't'")
+
+
+def test_zero_length_body_reports_malformed_not_eof():
+    # A length prefix declaring a 0-byte body is a malformed frame, not an EOF. The message
+    # must say so rather than the misleading "unexpected EOF".
+    buf = io.BytesIO(b"\x00\x00\x00\x00")        # 4-byte length prefix, value 0
+    try:
+        wire.decode(buf)
+    except wire.ProtocolError as e:
+        assert "malformed frame" in str(e)
+        assert "EOF" not in str(e)
+        return
+    raise AssertionError("expected ProtocolError for a zero-length body")
