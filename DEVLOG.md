@@ -6,7 +6,64 @@ these become the commit messages.
 
 ---
 
-## refactor(core): rename medium to protocol (link-layer concept)
+## 018 - feat: sprint 1 hardening (bounded sniff, C1 clean errors + verb gate, C4 replay DLT, protocol honesty)
+
+Retrofitted the four existing protocols and the core onto the cross-cutting conventions
+(`docs/protocol-conventions.md`) after the adversarial review rated them fix-then-ship. The
+three new protocols (JTAG/SPI/sub-GHz) and C3 (`dump` sugar) are out of scope for this sprint.
+
+BLOCKERS:
+- `backends/virtual.py::sniff` is now bounded entirely client-side (convention rule 4). The
+  loop stops at `count`, at `seconds`, and at a hard wall-clock timeout, with a per-recv
+  socket timeout derived from the remaining budget; when neither `count` nor `seconds` is
+  given a default ceiling (`SNIFF_DEFAULT_SECONDS=30s`) applies instead of capturing forever.
+  A never-ending or silent bridge can no longer hang the client. The client also sends a stop
+  and clears the read timeout when it ends.
+- C1 clean error handling + capability gate. New `core/errors.py::ProbeError(RuntimeError)`,
+  operator-facing. `cli.main` now catches `NotImplementedError` (rendered "not supported by
+  this backend") and `(ProbeError, wire.ProtocolError, RuntimeError, OSError, ValueError)`,
+  printing `probe: <msg>` with a nonzero exit, never a traceback. `cli._require_verb(caps,
+  verb)` gates every protocol verb against `capabilities().verbs` BEFORE routing; an
+  unsupported verb is a clean `ProbeError`. The `socketcan.op` and `serial` sniff/inject/
+  replay/op `NotImplementedError` sites became clean `ProbeError` refusals.
+
+MAJORS:
+- C4 replay DLT validation. New `core/frame.py::read_pcap_for_replay(path, expected_dlt)`
+  refuses (ProbeError) a pcap whose link type differs from the active protocol's `PCAP_DLT`,
+  and refuses loud when the protocol declares no DLT (conservative, never guesses). Wired into
+  both `virtual.replay` and `socketcan.replay`.
+- Protocol semantics honesty:
+  - `can.decode_frame` now rejects an illegal DLC (>8) and a buffer that is not exactly one
+    16-byte SocketCAN frame, instead of silently clamping/truncating.
+  - `ble.unlock_write_frame` now emits the FULL LE_LL_WITH_PHDR layering its declared DLT 256
+    requires (10-byte LE pseudo-header + LL data PDU with a connection access address + 3-byte
+    CRC trailer + L2CAP on the ATT CID + ATT Write Request), so a capture actually dissects as
+    `btatt.opcode == 0x12` in stock tools. Decision: keep DLT 256 and make the bytes match it
+    (option A), because the conventions make DLT first-class and courses already reference
+    LE_LL_WITH_PHDR / btatt. New `ble.att_write_pdu` validates the 16-bit handle / 8-bit value
+    width (clean ProbeError on overflow, no silent wrap).
+  - Reconciled the Zigbee DLT: `core/frame.py` docstring said 215, `zigbee.py` uses 195. 195
+    (LINKTYPE_IEEE802_15_4_WITHFCS) is correct; fixed the docstring.
+
+C2 + minors:
+- C2 `Capabilities.shape` ("packet" | "stream" | "transaction", default "packet", backward
+  compatible). Set packet for CAN/virtual, stream for serial/UART; `probe info` prints it.
+- `inject --channel` added and threaded through to `backend.inject(..., channel=)`.
+- `gatt write` help now states it also accepts a uuid (it already resolved one).
+- `wire.decode` now reports a declared zero-length body as a clear "malformed frame", not the
+  misleading "unexpected EOF reading body".
+
+TESTS (19 -> 46 passing, 1 pre-existing skip): `test_sniff_bound` (count/seconds/silent/
+default-ceiling bounds on a never-ending mock bridge), `test_cli_errors` (verb gate + clean
+ProbeError/wire-error/NotImplementedError exits), `test_replay_inject` (inject + channel,
+matching-DLT replay, cross-DLT refusal, no-DLT refusal), `test_cli_verbs` (UART read/write,
+Zigbee sniff to a 195-DLT pcap), `test_ble_frame` (stdlib structural walk of the DLT-256
+layering + width validation + optional scapy `btatt.opcode` dissection, skips without scapy),
+`test_capabilities_shape` (shape default/values/info), plus CAN illegal-DLC + wrong-size and
+the wire zero-length-body cases.
+
+Public happy-path commands (scan/sniff/can send/uart read/gatt enum/...) unchanged; only
+error handling, bounds, and wrong semantics changed.
 
 Renamed the link-layer / frame-semantics abstraction from `medium` to `protocol` throughout
 the client. The word `medium` was overloaded against the existing wire concept; `protocol`

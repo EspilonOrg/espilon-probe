@@ -103,6 +103,10 @@ def decode(stream) -> dict | None:
     (length,) = _LEN.unpack(header)
     if length > MAX_MSG:
         raise ProtocolError(f"declared message too large: {length}")
+    if length == 0:
+        # A length prefix that declares an empty body: there is no JSON object to parse and
+        # every message must at least carry a type field. This is a malformed frame, not EOF.
+        raise ProtocolError("malformed frame: declared body length is zero")
     body = _read_exactly(stream, length)
     if not body:
         raise ProtocolError("unexpected EOF reading body")

@@ -21,6 +21,7 @@ class Capabilities:
     transport: str                    # "virtual", "hci", "killerbee", "openocd", ...
     channels: list[int] = field(default_factory=list)
     verbs: list[str] = field(default_factory=list)   # core + protocol verbs offered
+    shape: str = "packet"             # "packet" | "stream" | "transaction" (C2)
     meta: dict = field(default_factory=dict)
 
 
