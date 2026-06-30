@@ -14,7 +14,20 @@ import struct
 from .errors import ProbeError
 from .wire import Frame   # re-export the single Frame type
 
-__all__ = ["Frame", "PcapWriter", "read_pcap", "read_pcap_for_replay"]
+__all__ = [
+    "Frame", "PcapWriter", "read_pcap", "read_pcap_for_replay",
+    "DLT_USER_PROBE_SUBGHZ", "DLT_USER_PROBE_SPI", "DLT_USER_PROBE_JTAG",
+]
+
+# DLT_USER allocation registry (probe-wide). There is no standard pcap link type for JTAG,
+# SPI, or our sub-GHz packet envelope, so we allocate from the libpcap LINKTYPE_USER range
+# (147..162 = DLT_USER0..DLT_USER15). Recorded here so both wire sides and the docs never
+# drift (see docs/protocol-conventions.md section 5). DLT_USER carries no globally-registered
+# dissector, so stock tshark shows these as raw USERn bytes; the layered payload for each is
+# documented in the matching protocol doc.
+DLT_USER_PROBE_SUBGHZ = 147   # USER0: 8-byte sub-GHz pseudo-header + demod payload
+DLT_USER_PROBE_SPI = 148      # USER1: SPI transaction record (optional pcap form)
+DLT_USER_PROBE_JTAG = 149     # USER2: JTAG transaction record (optional pcap form)
 
 _MAGIC_LE = 0xA1B2C3D4
 # classic pcap magics -> byte order ("<" LE, ">" BE), microsecond and nanosecond variants

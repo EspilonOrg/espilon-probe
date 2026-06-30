@@ -6,6 +6,43 @@ these become the commit messages.
 
 ---
 
+## 019 - feat(protocols): sprint 2 - JTAG, SPI, sub-GHz virtual protocols
+
+Three new protocols implemented exactly to the architect's specs
+(`docs/protocol-{jtag,spi,subghz}.md`) on top of the Sprint 1 conventions (C1 ProbeError +
+verb gate, C2 `Capabilities.shape`, C4 replay-DLT). No Backend-contract or wire change: the
+architect's conclusion held - `op()`/`OP`/`OP_RESULT` carry every transaction, radio params
+ride in existing fields and the sub-GHz pseudo-header.
+
+DLT registry: added `DLT_USER_PROBE_SUBGHZ=147`, `DLT_USER_PROBE_SPI=148`,
+`DLT_USER_PROBE_JTAG=149` to `core/frame.py` (the libpcap LINKTYPE_USER range), mirroring the
+conventions doc registry so both wire sides and the docs never drift.
+
+- JTAG (`protocols/jtag.py`, shape=transaction): verbs `["scan", "jtag"]`. `scan` is the
+  scan-chain enumerate; the `jtag` group adds scan-chain/idcode/halt/resume/read/write/reg/
+  dump. `sniff`/`inject`/`replay` GATED OUT (advertised-verbs gate). Default artifact = raw
+  binary memory image from `dump` (C3 sugar over `jtag.read`, 16 MiB client ceiling, whole-
+  word lengths only); optional transaction pcap under DLT 149.
+- SPI (`protocols/spi.py`, shape=transaction, master role): verbs `["scan", "spi"]`. `scan` is
+  JEDEC-ID enumerate; the `spi` group adds id/read/write/reg/xfer/dump. `sniff`/`inject`/
+  `replay` GATED OUT. Default artifact = raw binary flash image from `dump` (C3 sugar over
+  `spi.read`, 32 MiB ceiling, 4 KiB chunks); optional transaction pcap under DLT 148.
+- sub-GHz (`protocols/subghz.py`, shape=packet): all four core verbs apply, BOUNDED (reuses
+  the Sprint-1 client-side sniff bound); the `subghz` group adds demod (HINT only, no solver)
+  and bands. Radio params `--freq`/`--mod`/`--rate` extend the core verbs; `inject` builds the
+  8-byte pseudo-header so a transmitted frame self-describes its params. DLT 147 with the
+  documented pseudo-header; `replay` validates DLT==147 (C4). `scan --band` filters client-side
+  on the advertised band ranges, refusing an unknown band.
+
+CLI: `_VERB_REQUIRES` extended with jtag/spi/subghz group gating; `scan` is protocol-aware
+(transaction protocols enumerate via the protocol module's `op()`-backed rows); int args
+(addr/word/len) parse via a clean `_parse_int` helper (ProbeError, no traceback).
+
+Tests: `test_jtag.py`, `test_spi.py`, `test_subghz.py` cover the verb set, capability gating
+(sniff/inject/replay fail clean on JTAG/SPI), idcode/JEDEC enumerate, dump artifacts +
+optional DLT pcaps + the dump ceiling, sub-GHz pseudo-header round-trip + bounded sniff +
+replay DLT match/mismatch + band filter. Suite: 80 passed, 1 skipped (was 46/1).
+
 ## 018 - feat: sprint 1 hardening (bounded sniff, C1 clean errors + verb gate, C4 replay DLT, protocol honesty)
 
 Retrofitted the four existing protocols and the core onto the cross-cutting conventions
