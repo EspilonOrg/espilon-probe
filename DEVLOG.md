@@ -6,6 +6,35 @@ these become the commit messages.
 
 ---
 
+## 021 - fix(cli): honest error messages across all 7 protocols (Audit-A polish)
+
+Cosmetic follow-up to entry 020. The BLOCKER fix guarded jtag/spi at source, but three
+at-source paths still leaked Python-internals text under the clean `probe:` prefix for the
+remaining protocols (ble/zigbee/subghz + the read/inject hex paths). No safety/leak change:
+the anti-leak BLOCKER is already closed. The verb gate, DLT logic, bounded sniff, and the
+catch-all backstop are untouched. Only the wording is made honest/consistent.
+
+- `cli.py`: new `_scan_rows()` normalizes the generic `scan` result before the display loop
+  (skips non-dict rows, refuses a non-list `items` with `backend returned non-list scan
+  items`), the same pattern jtag/spi `scan_rows` already use, so ble/zigbee/subghz `scan` stop
+  rendering `'NoneType' object has no attribute 'get'`.
+- `backends/virtual.py`: `scan()` refuses a non-list `items` loud at the backend boundary
+  rather than passing a guessed shape to the display loop.
+- `cli.py`: `_fmt_value` now routes through `_hex_field` (reuses spi's guarded `_hex_bytes`),
+  so a bad backend hex value on `spi read` / `gatt read` gives `backend returned malformed hex
+  for <field>` instead of `non-hexadecimal number found in fromhex()`. spi.dump already used
+  the guarded path; interactive read is now consistent.
+- `cli.py`: new `_parse_hex()` (sibling of `_parse_int`) validates operator `--hex` on
+  `inject` and `spi write` at source, so `probe inject --hex zz` reads `invalid hex ...`
+  matching the address-error wording instead of fromhex's text.
+- `tests/test_error_honesty.py` (new): a malformed scan row on a packet protocol, a bad
+  backend hex on gatt/spi read, and operator inject/spi-write `--hex` garbage, each asserting
+  the clean protocol-level message and no Python-internals text.
+
+Suite: 112 passed, 1 skipped.
+
+---
+
 ## 020 - fix(protocols): crash-proof the transaction-scan + transaction-result paths
 
 Sprint 2 audit BLOCKER: a malformed backend response could leak a raw Python traceback

@@ -170,8 +170,46 @@ def _parse_int(text: str, what: str = "value") -> int:
         raise ProbeError(f"invalid {what} {text!r} (expected an int, e.g. 0x20000000 or 12)")
 
 
-def _fmt_value(hexstr: str) -> str:
-    raw = bytes.fromhex(hexstr) if hexstr else b""
+def _parse_hex(text: str, what: str = "hex") -> bytes:
+    """Parse an operator-supplied hex string to bytes, failing clean.
+
+    Malformed operator hex (`probe inject --hex zz`, `probe spi write --hex zz`) is a
+    `ProbeError` rendered `probe: invalid hex ...`, matching the address-error wording, never
+    the bare `non-hexadecimal number found in fromhex()` text from `bytes.fromhex`."""
+    try:
+        return bytes.fromhex(str(text))
+    except (ValueError, TypeError):
+        raise ProbeError(f"invalid {what} {text!r} (expected hex bytes, e.g. 0201 or deadbeef)")
+
+
+def _scan_rows(items) -> list[dict]:
+    """Normalize the generic `scan` result for the display loop, matching jtag/spi.scan_rows.
+
+    The packet protocols (ble/zigbee/subghz) route `scan` through the generic SCAN wire verb,
+    whose `items` are backend-supplied. A non-list `items` is a clean `ProbeError` (we do not
+    guess a shape we cannot read), and individual non-dict rows are skipped rather than crashing
+    the display loop on `.get()` (which used to leak `'NoneType' object has no attribute 'get'`).
+    """
+    if items is None:
+        return []
+    if not isinstance(items, list):
+        raise ProbeError(f"backend returned non-list scan items {items!r}")
+    return [it for it in items if isinstance(it, dict)]
+
+
+def _hex_field(value, field: str) -> bytes:
+    """Coerce a backend hex string to bytes for display, or raise a clean `ProbeError`.
+
+    Reuses spi's guarded `_hex_bytes` so a bad backend hex value (spi read / gatt read display)
+    gives `backend returned malformed hex for <field>` instead of leaking
+    `non-hexadecimal number found in fromhex()`. spi.dump already routes through this path;
+    this makes the interactive read display consistent."""
+    from .protocols.spi import _hex_bytes
+    return _hex_bytes(value if value else "", field)
+
+
+def _fmt_value(hexstr, field: str = "value") -> str:
+    raw = _hex_field(hexstr, field)
     try:
         s = raw.decode()
         if s.isprintable():
@@ -239,7 +277,7 @@ def _dispatch(args, b) -> int:
             from .protocols import spi
             items = spi.scan_rows(b)
         else:
-            items = b.scan()
+            items = _scan_rows(b.scan())
             if getattr(args, "band", None):
                 items = _filter_band(items, caps, args.band)
         if not items:
@@ -282,7 +320,7 @@ def _dispatch(args, b) -> int:
                 print(f"0x{c['handle']:04x}  {c['uuid']}  {c['props']}")
         elif args.gatt_cmd == "read":
             h = _resolve_handle(b, args.handle)
-            print(_fmt_value(ble.gatt_read(b, h).get("value", "")))
+            print(_fmt_value(ble.gatt_read(b, h).get("value", ""), "gatt.read value"))
         elif args.gatt_cmd == "write":
             h = _resolve_handle(b, args.handle)
             res = ble.gatt_write(b, h, args.value)
@@ -345,10 +383,10 @@ def _build_inject(b, args) -> tuple[bytes, int | None]:
         if not args.mod:
             raise ProbeError("subghz inject needs --mod (ook|ask|2fsk|gfsk) together with --freq")
         rate = args.rate if args.rate is not None else subghz.DEFAULT_RATE
-        frame = subghz.encode_frame(bytes.fromhex(args.hex), args.freq, args.mod, rate)
+        frame = subghz.encode_frame(_parse_hex(args.hex, "inject --hex"), args.freq, args.mod, rate)
         return frame, subghz.parse_freq(args.freq)
     if args.hex:
-        return bytes.fromhex(args.hex), args.channel
+        return _parse_hex(args.hex, "inject --hex"), args.channel
     with open(args.read, "rb") as fh:
         return fh.read(), args.channel
 
@@ -412,9 +450,10 @@ def _dispatch_spi(args, b) -> None:
     elif cmd == "read":
         addr = _parse_int(args.addr, "address")
         length = _parse_int(args.len, "length")
-        print(_fmt_value(spi.read(b, addr, length, cs=args.cs).get("data", "")))
+        print(_fmt_value(spi.read(b, addr, length, cs=args.cs).get("data", ""), "spi.read data"))
     elif cmd == "write":
         addr = _parse_int(args.addr, "address")
+        _parse_hex(args.hex, "spi write --hex")     # validate operator hex at source, clean error
         r = spi.write(b, addr, args.hex, cs=args.cs)
         print("ok" if r.get("ok") else str(r))
     elif cmd == "reg":

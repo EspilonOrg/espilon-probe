@@ -95,7 +95,16 @@ class VirtualBackend(Backend):
         return r
 
     def scan(self) -> list[dict]:
-        return self._txn({"t": wire.SCAN}).get("items", [])
+        # `items` is backend-supplied; a missing key defaults to [], but an explicit non-list
+        # (e.g. JSON null or an object) must not flow to the display loop as if it were rows.
+        # We hand the raw list to the caller, which normalizes per-row (cli._scan_rows); a
+        # non-list is refused loud here rather than guessed at.
+        items = self._txn({"t": wire.SCAN}).get("items", [])
+        if items is None:
+            return []
+        if not isinstance(items, list):
+            raise RuntimeError(f"bridge returned non-list scan items {items!r}")
+        return items
 
     def op(self, verb: str, **kwargs) -> dict:
         return self._txn({"t": wire.OP, "verb": verb, "args": kwargs}).get("result", {})
