@@ -21,6 +21,11 @@ SNIFF_DEFAULT_SECONDS = 30.0
 # requested duration plus a small margin, or a fixed ceiling when only `count` was given.
 SNIFF_COUNT_ONLY_TIMEOUT = 60.0
 SNIFF_TIMEOUT_MARGIN = 5.0
+# Grace window to consume the single trailing SNIFF_END a conformant bridge sends to terminate a
+# capture, once our own bound has tripped. The bridge sends it in the same burst as the frames, so
+# it is already buffered and the wait is effectively zero; this only caps how long we wait for a
+# bridge that omits it, so the client can never wedge here.
+SNIFF_END_DRAIN_GRACE = 0.5
 
 
 class VirtualBackend(Backend):
@@ -159,14 +164,19 @@ class VirtualBackend(Backend):
                             "channel": channel})
         start = time.monotonic()
         n = 0
+        bound_reached = False    # our own count/seconds/timeout tripped (vs a quiet/closed bridge)
+        saw_end = False          # the bridge's terminating SNIFF_END was already consumed in-loop
         with PcapWriter(out_pcap, dlt) as pw:
             while True:
                 elapsed = time.monotonic() - start
                 if count is not None and n >= count:
+                    bound_reached = True
                     break
                 if seconds is not None and elapsed >= seconds:
+                    bound_reached = True
                     break
                 if elapsed >= timeout:
+                    bound_reached = True
                     break
                 # Bound this single recv so the client never blocks past the budget.
                 remaining = timeout - elapsed
@@ -176,24 +186,47 @@ class VirtualBackend(Backend):
                 try:
                     m = wire.recv(self._r)
                 except (socket.timeout, OSError):
-                    break
+                    break            # bridge went quiet; nothing left to realign
                 if m is None:
-                    break
+                    break            # bridge closed the connection
                 t = m.get("t")
                 if t == wire.FRAME:
                     pw.write(wire.Frame.from_msg(m))
                     n += 1
                 elif t == wire.SNIFF_END:
+                    saw_end = True
                     break
                 elif t == wire.ERROR:
                     raise RuntimeError(m.get("msg", "error"))
-        # Best-effort: tell the bridge to stop, then clear the read timeout.
-        try:
-            wire.send(self._w, {"t": wire.SNIFF_END, "count": n})
-        except OSError:
-            pass
+        # A conformant bridge terminates every capture with exactly one inbound SNIFF_END. When our
+        # own bound (count/seconds/timeout) tripped first, that marker is still queued on the wire;
+        # consume it so the NEXT command on a PERSISTENT connection reads its own reply and not the
+        # stale marker. We deliberately do NOT send a SNIFF_END of our own: the bridge does not read
+        # while it streams a capture (an outbound stop cannot end one early), and older bridges
+        # reject the unknown inbound `sniff_end` type, which desyncs the session. It is inbound-only.
+        if bound_reached and not saw_end:
+            self._drain_sniff_end(start, timeout)
         try:
             self._sock.settimeout(None)
         except OSError:
             pass
         return n
+
+    def _drain_sniff_end(self, start: float, timeout: float) -> None:
+        """Consume the single trailing SNIFF_END that terminates a capture, realigning the stream
+        for the next command on a persistent connection.
+
+        A conformant bridge sends the marker in the same burst as the frames (both queued before it
+        loops back to read), so it is already buffered and this returns at once. The wait is bounded
+        (`SNIFF_END_DRAIN_GRACE`, itself clamped by the capture's remaining wall-clock budget) so a
+        bridge that omits the marker cannot wedge the client - it gives up and leaves the stream as
+        is. Exactly one message is consumed: the marker for a count-bounded capture, or a stray
+        frame from a non-conformant bridge (which we do not chase, so we can never hang here).
+        """
+        remaining = timeout - (time.monotonic() - start)
+        budget = min(SNIFF_END_DRAIN_GRACE, max(0.0, remaining))
+        try:
+            self._sock.settimeout(budget)
+            wire.recv(self._r)
+        except (socket.timeout, OSError):
+            return

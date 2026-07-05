@@ -6,6 +6,78 @@ these become the commit messages.
 
 ---
 
+## 023 - fix(virtual): stop client-sent SNIFF_END + drain the bridge marker (persistent-session desync)
+
+QA found a client/bridge protocol skew on a PERSISTENT connection that sniffs then continues.
+Both are tool-side, in `backends/virtual.py`; the wire protocol and the bridge are unchanged.
+
+- ROOT CAUSE (Fix A): after a capture the client sent a courtesy OUTBOUND `SNIFF_END` to "tell
+  the bridge to stop". It is not load-bearing: the bridge does not read while it streams a
+  capture (an inbound stop cannot end one early), and the capture is already bounded on both
+  sides by `count`/`seconds`, with the bridge terminating it via its OWN inbound `SNIFF_END`.
+  Older packaged bridges do not know that message type and answer `unknown message type:
+  sniff_end`; that stray error frame then desyncs the next op on a persistent connection
+  (a fresh-connection-per-call was unaffected, which is why smoke passed). FIX: the client no
+  longer sends it - `SNIFF_END` is inbound-only, so no bridge, old or new, ever sees it.
+- SECOND CONTRIBUTOR: in the `count` case the client broke at its bound WITHOUT consuming the
+  bridge's own terminating `SNIFF_END`, leaving it queued to be misread by the next op. Added a
+  bounded `_drain_sniff_end()` that consumes the single trailing marker (already buffered from
+  the same burst, so the wait is effectively zero) so a persistent session stays aligned; the
+  wait is capped (`SNIFF_END_DRAIN_GRACE`) so a bridge that omits the marker cannot wedge us.
+  Documented limit: a `seconds`-bounded capture stopped mid-stream is realigned best-effort.
+- TEST: `test_sniff_then_op_on_persistent_connection_does_not_desync` runs a persistent
+  connection against a mock OLDER bridge (streams a count-bounded capture + its own SNIFF_END,
+  serves an op, and REJECTS any inbound `sniff_end`). It asserts the follow-up op returns its
+  own result and that the client put no `sniff_end` on the wire.
+
+## 023b - test(spi): lock the spi.reg WRITE success shape (`_report_write` verified safe)
+
+Verified against the kit SPI contract (`kit/protocols/spi.py::FlashModel.reg`): a successful
+`spi.reg` WRITE returns `{"ok": True, "name": ...}` (a READ returns `{"name", "value"}` with no
+`ok`). So the earlier `_report_write` change (any result lacking `ok: True` is a fail-loud
+reject) is CORRECT for spi reg writes - the spi-flash-unlock WRSR step (`probe spi reg status
+--write 00`) renders as success, not "register write rejected". No code change; added two guards:
+one that a `{"ok": True, ...}` reg-write success is not rejected, one that a genuine `{"ok":
+False, ...}` reject still fails loud.
+
+## 022 - fix(cli): uniform `probe info` verbs + clean write/hex/handle errors (10/10 polish)
+
+Blind-QA docked spi/jtag/can/uart boxes below 10/10 on three CLI-formatting nits. All
+tool-side, all in `cli.py`; no protocol/backend semantics change, the verb gate and anti-leak
+backstop are untouched.
+
+- `probe info` verb list is now normalized for display: new `_PROTOCOL_VERB` map +
+  `_info_verbs()` dedup the advertised verbs (a sloppy bridge once sent `scan,...,scan,jtag`)
+  and append each protocol's own action verb when the bridge omits it (a CAN bridge advertises
+  only the core verbs, yet `probe can` is a real command). ble->gatt, can->can, uart->uart,
+  jtag->jtag, spi->spi, subghz->subghz; zigbee has no group verb. Display-only: the capability
+  gate still runs against the raw advertised verbs.
+- Non-hex CAN payload: `probe can send 0x7e0 ZZ` now validates the payload with `_parse_hex`
+  (and the id with `_parse_int`) at source, so it reads `invalid hex payload ...` instead of
+  leaking `non-hexadecimal number found in fromhex()`.
+- Rejected write: new `_report_write()` renders a write result as `ok` or raises a one-line
+  `write rejected at 0x40000004 (reason)` `ProbeError` (nonzero exit) instead of dumping the
+  raw `{'ok': False, 'addr': 1073741828}` dict. Wired into gatt/jtag/spi write and spi reg
+  write. A result without an explicit `ok: True` is conservatively treated as a reject (fail
+  loud, do not guess a success we cannot read).
+- Unreadable GATT handle: `gatt read 0x9999` now requires an authoritative `value` key in the
+  result; a result that omits it raises `no such handle 0x9999 (handle not readable)` instead
+  of printing a silent empty line.
+- `tests/test_cli_polish.py` (new, 19 tests): info verb dedup/append across all protocols +
+  e2e, the three clean errors, and the CAN send-then-dump transaction boundary from the tool
+  side (current frame captured, no cross-connection bleed, no shared read buffer).
+
+Flagged for probe-maker (device-side, not tool-fixable soundly): (1) if the CAN bridge/box
+`device.py` response queue is not flushed per transaction, stale/partial frames bleed across
+dumps; the tool's framing is exact and it holds no cross-connection buffer, so the queue must
+be drained box-side. (2) if the GATT device returns `{"value": ""}` (rather than an error or
+an omitted key) for an unknown handle, the tool cannot distinguish it from a legitimately
+empty read; the device should signal unreadable handles distinctly.
+
+Suite: 131 passed, 1 skipped.
+
+---
+
 ## 021 - fix(cli): honest error messages across all 7 protocols (Audit-A polish)
 
 Cosmetic follow-up to entry 020. The BLOCKER fix guarded jtag/spi at source, but three
