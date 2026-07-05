@@ -2,7 +2,7 @@
 
 Raw file-descriptor I/O, no third-party dependency. Optional best-effort raw+baud setup via
 termios for a real tty (harmless to skip on a pty). The same `uart read` / `uart write`
-verbs that drive the virtual lab drive a real line here, which is the dual-purpose payoff
+verbs that drive the virtual backend drive a real line here, which is the dual-purpose payoff
 for UART. A pty pair makes this provable locally with no hardware.
 """
 

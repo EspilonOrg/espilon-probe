@@ -2,7 +2,7 @@
 
 Auto-skips unless a vcan0 exists. Enable it with:
     sudo ip link add dev vcan0 type vcan && sudo ip link set up vcan0
-Then the SAME protocol codec and verbs that drive the virtual lab drive a real bus.
+Then the SAME protocol codec and verbs that drive the virtual backend drive a real bus.
 """
 
 import socket
@@ -45,7 +45,7 @@ def test_socketcan_loopback(tmp_path):
         t = threading.Thread(target=grab)
         t.start()
         time.sleep(0.1)
-        can.send(sender, 0x123, "deadbeef")     # same call as in the virtual lab
+        can.send(sender, 0x123, "deadbeef")     # same call as on the virtual backend
         t.join(3)
 
         assert captured.get("n", 0) >= 1

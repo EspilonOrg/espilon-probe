@@ -13,8 +13,8 @@ replayable without external state. `replay` validates the pcap DLT == 147 (conve
 the shared replay path) and reads freq/mod/rate from each frame's pseudo-header by default.
 
 The `subghz` protocol verbs are HINTS only: `demod` reports a best-effort modulation/bitrate
-guess for a capture the operator already has (it does NOT decode payload meaning or recover a
-flag - decoding stays in the operator's stock tools), and `bands` lists the ISM bands. Both
+guess for a capture the operator already has (it does NOT decode payload meaning - decoding
+stays in the operator's stock tools), and `bands` lists the ISM bands. Both
 travel over the existing `op()` carrier, so the identical commands later run against a real
 `sdr`/`cc1101` backend; the pseudo-header and verb surface are unchanged.
 """
@@ -153,7 +153,7 @@ def demod(backend: Backend, capture: str | None = None) -> dict:
     """A modulation/bitrate/encoding HINT for a capture the operator already has.
 
     This is a guess to help the operator pick params; it does NOT decode the payload meaning
-    or recover a flag (the conventions forbid building a solver into the client).
+    (the conventions forbid building a solver into the client).
     """
     if capture is None:
         return _result(backend, "subghz.demod")

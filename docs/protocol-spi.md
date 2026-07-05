@@ -1,7 +1,7 @@
 # Protocol: SPI (virtual)
 
 Read `protocol-conventions.md` first. This doc specifies `protocols/spi.py` and what a
-virtual backend must simulate. Implementation is probe-dev.
+virtual backend must simulate.
 
 ## 1. What it models
 
@@ -113,20 +113,20 @@ offset  size  field
 Off by default. The raw flash image is the primary, honest output; do not emit a
 standard-DLT pcap that no dissector understands.
 
-## 5. What the virtual backend must simulate (for a lab author)
+## 5. What a virtual target must simulate
 
-A `device.py` author exposes a SPI device model:
+A virtual target exposes a SPI device model:
 
 - one or more chip-selects, each a device with a `jedec_id` and a backing byte array
   (a NOR flash image), plus a status register and a write-enable latch.
 - address space with regions and permissions; a `write`/page-program only succeeds when the
-  region is writable and WREN is set (a lab can model an OTP / locked region).
-- the flag (Model B): flag bytes staged at a flash offset that is only readable after the
-  correct unlock (e.g. write a key to a status/config register via `spi.reg`, which flips a
-  protection bit, then `spi.read` the now-readable region). Delivered over the wire as the
-  read data, never in filesystem/env. Mirrors the JTAG and BLE unlock-then-read pattern.
+  region is writable and WREN is set (a target can model an OTP / locked region).
+- gated regions: a flash offset that only becomes readable after the correct unlock (e.g.
+  write a key to a status/config register via `spi.reg`, which flips a protection bit, then
+  `spi.read` the now-readable region). Delivered over the wire as the read data. Mirrors the
+  JTAG and BLE unlock-then-read pattern.
 
-Backend hooks (`device.py`, all via existing `OP`):
+Backend hooks (all via existing `OP`):
 
 ```
 on_op("spi.id", cs)               -> {jedec_id, ...}
@@ -141,7 +141,7 @@ Same-commands-transfer note: the identical `probe spi *` commands later run agai
 corresponding flash commands (`03`/`02`/`9F`), `spi.xfer` to a raw `spi.exchange`,
 `spi.dump` to a chunked read loop. The protocol module and CLI are unchanged; only the
 backend swaps. The flash/register model the virtual backend simulates is the same surface a
-real NOR exposes, so a virtual solve transfers to a real chip.
+real NOR exposes, so a workflow validated virtually transfers to a real chip.
 
 ## 6. Contract-evolution items touched
 

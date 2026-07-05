@@ -2,15 +2,21 @@
 
 All notable changes to probe. This project adheres to Semantic Versioning.
 
-## [0.1.0] - unreleased
+## [0.1.0] - 2026-07-05
 
-First release. A working generalist CLI and library for the physical layer.
+First public release. A working generalist CLI and library for the physical layer.
 
 ### Added
 
 - `probe` CLI with core verbs `info` / `scan` / `sniff` / `inject` / `replay`, plus protocol
-  verbs `gatt` (BLE), `can`, and `uart`.
-- Protocols: `ble`, `can`, `zigbee`, `uart`.
+  verbs `gatt` (BLE), `can`, `uart`, `jtag`, `spi`, and `subghz`.
+- Protocols: `ble`, `can`, `zigbee`, `uart`, `jtag`, `spi`, `subghz`.
+- Transaction protocols `jtag` and `spi`: scan-chain / JEDEC-ID enumeration, halt/resume,
+  memory and register read/write, and bounded firmware/flash `dump` to a raw image (with an
+  optional transaction pcap under a documented DLT_USER linktype).
+- sub-GHz radio: band scan, bounded `sniff`, `inject`/`replay` on `--freq`/`--mod`/`--rate`,
+  and a `subghz demod` modulation/bitrate hint. Captures self-describe their radio params via
+  an 8-byte pseudo-header.
 - Backends:
   - `virtual` - talks a small length-prefixed wire protocol over TCP to a target server
     (for training targets); forwards a client config (including `--baud`) in the handshake.

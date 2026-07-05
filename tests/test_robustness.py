@@ -1,5 +1,5 @@
-"""Client-side robustness tests against the mock wire server (server-side robustness lives
-with the bridge in the content repo)."""
+"""Client-side robustness tests against the mock wire server (server-side robustness is the
+target server's responsibility)."""
 
 import socket
 import threading

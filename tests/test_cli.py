@@ -14,7 +14,7 @@ def _run(argv, port, capsys):
 
 
 def test_cli_scan_info_gatt(capsys):
-    state = {"value": "LOCKED", "after": "OPEN ESPILON{mock_flag}"}
+    state = {"value": "LOCKED", "after": "OPEN SECRET-mock-token"}
     srv, port = serve_mock(GATT_CAPS, gatt_respond(state))
     try:
         assert "protocol: ble" in _run(["info"], port, capsys)
@@ -22,7 +22,7 @@ def test_cli_scan_info_gatt(capsys):
         assert "fff2" in _run(["gatt", "enum"], port, capsys)
         assert _run(["gatt", "read", "0x0011"], port, capsys).strip() == "LOCKED"
         _run(["gatt", "write", "0x0014", "01"], port, capsys)
-        assert "ESPILON{mock_flag}" in _run(["gatt", "read", "0x0011"], port, capsys)
+        assert "SECRET-mock-token" in _run(["gatt", "read", "0x0011"], port, capsys)
     finally:
         srv.shutdown()
         srv.server_close()

@@ -2,7 +2,7 @@
 
 Raw PF_CAN, no third-party dependency. The same protocol codec (protocols/can.py) drives this
 and the virtual backend, so `probe --backend socketcan --target vcan0 can dump` is the
-exact workflow the player learned in the lab, now against a real bus. This is the
+exact workflow validated against the virtual backend, now against a real bus. This is the
 dual-purpose payoff for CAN.
 """
 

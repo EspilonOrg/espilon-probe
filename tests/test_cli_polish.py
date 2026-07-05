@@ -243,11 +243,11 @@ def test_gatt_read_present_value_still_prints(capsys):
 
 # --- Fix 3: CAN send-then-dump transaction boundary (tool side) ---
 
-def _can_queue_bridge(state):
-    """A CAN bridge that queues one response frame per INJECT and delivers it on the next SNIFF.
+def _can_queue_server(state):
+    """A CAN target that queues one response frame per INJECT and delivers it on the next SNIFF.
 
-    This models the lab's send-then-dump ordering: a dump issued before any send captures
-    nothing, and each delivered frame is popped so a well-behaved bridge never re-serves it.
+    This models a send-then-dump ordering: a dump issued before any send captures
+    nothing, and each delivered frame is popped so a well-behaved target never re-serves it.
     """
     def respond(msg):
         t = msg.get("t")
@@ -276,7 +276,7 @@ def test_can_send_then_dump_captures_current_frame(tmp_path):
     # send queues the negative response; the following dump captures exactly that frame.
     state = {"queue": []}
     srv, port = serve_mock(_caps(["scan", "sniff", "inject", "replay"], "can"),
-                           _can_queue_bridge(state))
+                           _can_queue_server(state))
     try:
         os.environ["ESP_PROBE"] = f"tcp://127.0.0.1:{port}"
         cli.main(["can", "send", "0x7e0", "0322f190"])
@@ -297,7 +297,7 @@ def test_can_dump_after_drain_does_not_bleed_prior_frame(tmp_path):
     # does not bleed into a later dump.
     state = {"queue": []}
     srv, port = serve_mock(_caps(["scan", "sniff", "inject", "replay"], "can"),
-                           _can_queue_bridge(state))
+                           _can_queue_server(state))
     try:
         os.environ["ESP_PROBE"] = f"tcp://127.0.0.1:{port}"
         cli.main(["can", "send", "0x7e0", "0322f190"])

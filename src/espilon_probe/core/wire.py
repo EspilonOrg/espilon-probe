@@ -1,4 +1,4 @@
-"""probe wire protocol: framed messages between the virtual backend and the lab bridge.
+"""probe wire protocol: framed messages between the virtual backend and a target server.
 
 Boring on purpose: length-prefixed JSON. Each message on the wire is
 

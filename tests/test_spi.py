@@ -58,7 +58,7 @@ def _spi_respond(flash):
 
 
 def _spi_reg_respond(regs):
-    """A scripted register file. A `spi.reg` WRITE returns the kit's success shape
+    """A scripted register file. A `spi.reg` WRITE returns the target's success shape
     `{"ok": True, "name": ...}`; a READ returns `{"name", "value"}` (no `ok`). A write to a
     read-only register name is rejected with `{"ok": False, ...}` so both paths are exercised.
     """
@@ -79,9 +79,9 @@ def _spi_reg_respond(regs):
 
 
 def test_spi_reg_write_success_shape_is_not_rejected(capsys):
-    # spi-flash-unlock's WRSR step (`probe spi reg status --write 00`): the kit returns
+    # A WRSR step (`probe spi reg status --write 00`): the target returns
     # {"ok": True, "name": "status"} on a successful reg write. _report_write must render that as
-    # success, NOT as "register write rejected". Regression guard for the flag-gating unlock.
+    # success, NOT as "register write rejected". Regression guard for the gated-region unlock.
     srv, port = serve_mock(SPI_CAPS, _spi_reg_respond({"status": "3c"}))
     try:
         out = _run(["spi", "reg", "status", "--write", "00"], port, capsys)

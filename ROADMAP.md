@@ -1,69 +1,40 @@
 # Roadmap
 
-The goal: a clean, public, pip-installable physical-layer tool (GitHub + PyPI) plus a
-private catalogue of probe-backed labs on learn.espilon.net. Public tool, private content.
+`probe` is a small, deliberately lean physical-layer tool. The roadmap below tracks the tool
+itself: protocols, backends, and packaging. Dates are intentionally omitted; items ship when
+they are correct and tested.
 
-## Done (v0.1, local)
+## Now (0.1.x)
 
-- Core: wire protocol, virtual backend, CLI, pcap, Backend contract. Hardened, reviewed
-  twice adversarially. 25 tests + 6 lab smoke/adversarial, green.
-- Four protocols virtual: BLE, CAN, Zigbee, UART.
-- One real backend coded: socketcan (raw PF_CAN).
-- Six labs under `labs/`, all green, course-iso, solved through the real `probe` CLI.
-- GPL-3.0, GitHub Actions CI, packaging at 0.1.0.
+- Seven protocols on the virtual backend: `ble`, `can`, `uart`, `zigbee`, `jtag`, `spi`,
+  `subghz`.
+- Real backends: `socketcan` (Linux SocketCAN, raw `PF_CAN`) and `serial` (UART over
+  termios), both provable locally with no special hardware.
+- Standard pcap capture (`sniff` / `can dump`) and a documented DLT_USER allocation for the
+  transaction/radio protocols.
+- Stdlib-only core, clean operator-facing errors, capability-gated verbs.
+- Packaging (`pip install espilon-probe`), GitHub Actions CI, GPLv3+.
 
-## Phase 1 - Finish the tool (local, no outward action)
+## Next
 
-- `serial` backend (UART over a pty pair): a second real backend provable locally, no
-  hardware. Live test like socketcan.
-- socketcan live: prove the loopback once a `vcan0` exists
-  (`sudo ip link add dev vcan0 type vcan && sudo ip link set up vcan0`).
-- Exhaustive CLI pass: drive EVERY flag of every lab through the real `probe` (not just one
-  path per lab).
-- Optional polish: uart-aware scan formatter; the minor pedagogy nits from review.
+- Additional real backends behind optional extras (each a thin adapter over a mature native
+  library):
+  - `hci` - BLE via BlueZ / bleak.
+  - `killerbee` - 802.15.4 / Zigbee.
+  - `sdr` - sub-GHz via SoapySDR (the one backend with genuine low-level demod/mod work).
+  - `openocd` - JTAG / SWD.
+  - `ftdi` - SPI / I2C via pyftdi.
+- More protocol coverage where it stays honest to the model (e.g. I2C as another
+  transaction/register protocol).
+- A trivial reference dissector (Lua / scapy) for the DLT_USER captures.
 
-## Phase 2 - Prep for GitHub (local, nothing pushed)
+## Principles that will not change
 
-- DEVLOG -> clean git history (Conventional Commits, no third-party attribution).
-- README for GitHub: CI badge, PyPI install, quickstart, labs overview, hardware-backend
-  transfer note.
-- CONTRIBUTING + a RELEASE checklist. Tag 0.1.0.
-
-## Phase 3 - Publish (GATED, explicit go per item)
-
-- Create the GitHub repo (public) and push.
-- Publish to PyPI so players `pip install espilon-probe`.
-
-## Phase 4 - Dockerize the labs (local, no outward action)
-
-- Per lab: `target/Dockerfile` (vendor probe from the repo + the device + a bridge
-  entrypoint on the probe port), `compose.yaml` (target exposed + tester QA), `challenge.yml`
-  (kind:lab, learn_slug, expose port, test_in_service: tester, flags).
-- Start with one gabarit (uart-bootloader), then the six.
-
-## Phase 5 - Learn integration (private, prod)
-
-- `_lab_panel.html`: render the dynamic `ESP_PROBE` endpoint per spawn.
-- `seed_lab` adapter ingests a probe `challenge.yml` into a `learn_labs` row.
-- Courses into `learn_lesson_translations[en]`.
-- Reachability: raw TCP per session from the player's own machine (decision: public port /
-  VPN / proxy). Shared with all Model B labs.
-
-## Phase 6 - Prod rollout (GATED, explicit go per item)
-
-- Build images on the prod dockerd, spawn, solve externally with `probe`, run smoke +
-  adversarial in the tester, Pony Tail blind.
-- Open per lab.
-
-## Open decisions
-
-- GitHub public vs private (leaning public).
-- PyPI public vs private index.
-- Reachability mechanism (public port / VPN / proxy).
-- Launch with the 6 probe labs, or add 3-4 container challenges first to vary the catalogue.
-
-## What can run now vs gated
-
-- Local now, no outward action: Phase 1 (serial pty), Phase 2 (git prep + README), Phase 4
-  (dockerize).
-- Gated on an explicit go: Phase 3 (push GitHub + publish PyPI), Phase 6 (prod deploy).
+- Stdlib only in the client core. Real-hardware dependencies live behind optional extras,
+  never in the core import path.
+- The client stays generalist: it speaks the wire protocol and drives backends, nothing
+  more. No target-specific content ships in this repo.
+- Same verbs, swap the backend: a workflow validated against a virtual target transfers to
+  real hardware unchanged.
+- Analysis stays in stock tools. `probe` does live I/O and normalized capture, not
+  dissection.

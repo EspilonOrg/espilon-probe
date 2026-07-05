@@ -1,10 +1,8 @@
 """The Backend contract - the single interface every backend implements.
 
-STRUCTURE PHASE: this defines the contract only. No backend is implemented yet.
-
 A backend is the bottom layer: it is the only thing that knows HOW bytes reach the
 target. Everything above it (CLI, protocol semantics) is backend-agnostic, so the exact
-same `probe scan` runs against the virtual lab backend or a real hardware backend.
+same `probe scan` runs against the virtual backend or a real hardware backend.
 """
 
 from __future__ import annotations
@@ -26,7 +24,7 @@ class Capabilities:
 
 
 class Backend(abc.ABC):
-    """Implemented by virtual.py (lab over TCP) and the real adapters (hci, killerbee...).
+    """Implemented by virtual.py (a target server over TCP) and the real adapters (hci, killerbee...).
 
     The core verbs below are common to every protocol. Connection-oriented or bus-specific
     operations (BLE gatt, JTAG halt, SPI dump) are exposed by the protocol layer and routed

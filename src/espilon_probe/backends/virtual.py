@@ -1,6 +1,6 @@
-"""Virtual backend: talks the probe wire protocol over TCP to an Espilon lab bridge.
+"""Virtual backend: talks the probe wire protocol over TCP to a target server.
 
-The default backend. The lab panel gives the player one dynamic endpoint per spawn:
+The default backend. Point it at the target endpoint:
     export ESP_PROBE=tcp://host:port
 Verbs map straight onto the wire protocol. No analysis here; capture is standard pcap.
 """
@@ -41,8 +41,7 @@ class VirtualBackend(Backend):
         t = self.target
         if not t:
             raise RuntimeError(
-                "no lab endpoint: set ESP_PROBE=tcp://host:port (see your lab panel) "
-                "or pass --target")
+                "no target endpoint: set ESP_PROBE=tcp://host:port or pass --target")
         if t.startswith("tcp://"):
             t = t[len("tcp://"):]
         host, _, port = t.partition(":")
@@ -94,7 +93,7 @@ class VirtualBackend(Backend):
         wire.send(self._w, msg)
         r = wire.recv(self._r)
         if r is None:
-            raise RuntimeError("connection closed by lab")
+            raise RuntimeError("connection closed by target")
         if r.get("t") == wire.ERROR:
             raise RuntimeError(r.get("msg", "error"))
         return r

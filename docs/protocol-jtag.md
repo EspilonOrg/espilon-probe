@@ -1,7 +1,7 @@
 # Protocol: JTAG (virtual)
 
 Read `protocol-conventions.md` first. This doc specifies the JTAG protocol module
-(`protocols/jtag.py`) and what a virtual backend must simulate. Implementation is probe-dev.
+(`protocols/jtag.py`) and what a virtual backend must simulate.
 
 ## 1. What it models
 
@@ -111,22 +111,22 @@ This is OPTIONAL and OFF by default (`probe jtag dump --pcap session.pcap` opts 
 binary image is the default and primary output. Do not emit an empty/garbage standard-DLT
 pcap.
 
-## 5. What the virtual backend must simulate (for a lab author)
+## 5. What a virtual target must simulate
 
-A `device.py` author exposes a small TAP model so a lab can be built:
+A virtual target exposes a small TAP model:
 
 - a scan chain: a list of TAPs, each with `idcode` (u32), `irlen`, optional `name`.
 - a flat memory map: address -> word, with regions (rom/sram/mmio) and per-region
   read/write permission. Reads outside a mapped region return a defined fill (e.g.
   `0xFFFFFFFF`) or raise a transaction error.
-- core state: `running` / `halted`; `halt` is required before `read`/`reg` (a lab can model
-  a locked core that refuses `halt`, i.e. a DAP-lock / RDP scenario).
-- the flag staging (Model B): the flag bytes live at a memory address that is only readable
-  after the correct sequence (e.g. halt -> write an unlock word to an MMIO register ->
-  read the now-unmapped region). Delivered over the wire as the read result, never in
-  filesystem/env. This mirrors the BLE "write to unlock then read" pattern.
+- core state: `running` / `halted`; `halt` is required before `read`/`reg` (a target can
+  model a locked core that refuses `halt`, i.e. a DAP-lock / RDP scenario).
+- gated regions: a region that only becomes readable after the correct sequence (e.g.
+  halt -> write an unlock word to an MMIO register -> read the now-mapped region), so the
+  target can model a protected-memory unlock. Delivered over the wire as the read result.
+  This mirrors the BLE "write to unlock then read" pattern.
 
-Backend hooks the bridge `device.py` implements (all via the existing `OP` message):
+Backend hooks a virtual target implements (all via the existing `OP` message):
 
 ```
 on_op("jtag.scan_chain") -> {taps:[...]}
@@ -142,8 +142,8 @@ Same-commands-transfer note: the identical `probe jtag *` commands later run aga
 `openocd` real backend, which maps `jtag.read` -> `mdw`, `jtag.write` -> `mww`,
 `jtag.halt` -> `halt`, `jtag.scan_chain` -> OpenOCD `scan_chain`, `jtag.dump` ->
 `dump_image`. The protocol module and CLI do not change; only the backend swaps. The TAP
-model the virtual backend simulates is the same surface OpenOCD exposes, so a lab solved
-virtually transfers to a real J-Link/FT2232 target.
+model the virtual backend simulates is the same surface OpenOCD exposes, so a workflow
+validated virtually transfers to a real J-Link/FT2232 target.
 
 ## 6. Contract-evolution items touched
 

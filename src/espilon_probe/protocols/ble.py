@@ -1,7 +1,7 @@
 """BLE protocol: GATT semantics + the `gatt` verb group.
 
 Adds connection-oriented verbs on top of the core ones, routed through Backend.op(...)
-so they work identically against the virtual lab backend and the real `hci` backend.
+so they work identically against the virtual backend and the real `hci` backend.
 Sniff uses DLT_BLUETOOTH_LE_LL_WITH_PHDR (256) so captures open cleanly in wireshark/tshark.
 
 `unlock_write_frame` emits the FULL layering DLT 256 requires (LE pseudo-header + Link Layer

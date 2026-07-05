@@ -1,6 +1,6 @@
 """Backend-field coercion (core/fields.py) + the cli.main traceback backstop.
 
-A lab bridge's responses are partly attacker-influenced, so a malformed numeric/list field
+A target server's responses are partly attacker-influenced, so a malformed numeric/list field
 must become a clean ProbeError in the protocol layer, and any malformed dict that still slips
 through must be rendered as a clean `probe: ...` line by the CLI backstop, never a traceback.
 """

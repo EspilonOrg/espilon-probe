@@ -1,7 +1,7 @@
 # Protocol: sub-GHz (virtual)
 
 Read `protocol-conventions.md` first. This doc specifies `protocols/subghz.py` and what a
-virtual backend must simulate. Implementation is probe-dev.
+virtual backend must simulate.
 
 ## 1. What it models
 
@@ -54,8 +54,8 @@ Protocol verbs (group `subghz`):
 
 `demod` is a HINT only (the conventions forbid building a solver into the client). It reads a
 capture the operator already has and reports a best-effort guess (OOK vs 2-FSK, bitrate,
-Manchester/PWM) so the operator can choose params; it does NOT decode the payload meaning or
-recover a flag. Decoding stays in the operator's stock tools (`rtl_433`, `urh`).
+Manchester/PWM) so the operator can choose params; it does NOT decode the payload meaning.
+Decoding stays in the operator's stock tools (`rtl_433`, `urh`).
 
 Radio args added to the core verbs:
 
@@ -128,30 +128,29 @@ client uses `meta.sniff_default_seconds` (30s). The client stops at
 `frames >= count OR elapsed >= seconds OR elapsed >= timeout` and then sends stop, regardless
 of further server frames. This is the explicit fix for the unbounded-sniff finding.
 
-## 5. What the virtual backend must simulate (for a lab author)
+## 5. What a virtual target must simulate
 
-A `device.py` author exposes an RF environment:
+A virtual target exposes an RF environment:
 
 - a set of emitters, each on a `freq`/`mod`/`bitrate`, periodically emitting a packet
-  payload (the bridge pushes these as `FRAME` during a `sniff`). `scan` reports which
+  payload (the target server pushes these as `FRAME` during a `sniff`). `scan` reports which
   frequencies show energy.
 - a receiver model for `inject`/`replay`: the device accepts a transmitted packet only if
   `freq`/`mod`/`rate` match within tolerance AND the payload matches what the device expects
   (e.g. the exact fixed-code of a remote). A matching transmit mutates device state
   (door "opens").
-- the flag (Model B): staged behind a correct transmit. Two canonical lab shapes:
+- a gated response behind a correct transmit. Two canonical shapes:
   1. fixed-code replay: sniff the remote's packet, replay it, the device unlocks and the
-     bridge emits the flag (as a subsequent FRAME or an `op` result).
+     target emits a result (as a subsequent FRAME or an `op` result).
   2. rolling/encoded: the operator must `subghz demod` to find the encoding, craft the
-     right payload, and `inject` it. The flag is delivered over the wire on success, never
-     in filesystem/env.
+     right payload, and `inject` it. The result is delivered over the wire on success.
 
-Backend hooks (`device.py`):
+Backend hooks a virtual target implements:
 
 ```
 on_scan()                    -> [{freq, energy, mod?}]      # active frequencies
 on_sniff(freq, mod, ...)     -> yields FRAME(raw=pseudohdr+payload) until client bound
-on_inject(frame, freq, mod)  -> {ok}    # match -> mutate state, maybe stage flag frame
+on_inject(frame, freq, mod)  -> {ok}    # match -> mutate state, maybe emit a result frame
 on_replay(frames)            -> {count}
 on_op("subghz.demod", cap)   -> {modulation, bitrate, encoding, guess_conf}
 on_op("subghz.bands")        -> {bands:[...]}
@@ -160,8 +159,8 @@ on_op("subghz.bands")        -> {bands:[...]}
 Same-commands-transfer note: the identical `probe sniff/inject/replay --freq --mod` commands
 later run against the `sdr` real backend (SoapySDR + the project's OOK/2-FSK demod/mod, the
 one genuinely low-level backend per ARCHITECTURE.md) or a `cc1101` backend. The pseudo-header
-and verb surface are unchanged; the real backend fills the same fields from actual RF. A lab
-that teaches "sniff -> replay a 433 MHz fob" transfers directly to a real HackRF.
+and verb surface are unchanged; the real backend fills the same fields from actual RF. A
+"sniff -> replay a 433 MHz fob" workflow transfers directly to a real HackRF.
 
 ## 6. Contract-evolution items touched
 

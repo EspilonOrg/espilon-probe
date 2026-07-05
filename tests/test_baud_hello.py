@@ -1,7 +1,7 @@
-"""The virtual backend must advertise its --baud to the bridge in the HELLO config.
+"""The virtual backend must advertise its --baud to the target server in the HELLO config.
 
-A real lab garbles output when the client's baud != the device's true line rate, so the
-client has to hand the bridge its baud at handshake time. These tests pin that:
+A real line garbles output when the client's baud != the device's true line rate, so the
+client has to hand the target server its baud at handshake time. These tests pin that:
 
   - the wire `hello()` constructor is backward compatible (config defaults to {}), and
   - opening a VirtualBackend(baud=N) sends {"config": {"baud": N}} in its HELLO.

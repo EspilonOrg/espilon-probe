@@ -19,8 +19,8 @@ absent. The `serial` test uses a pty pair and needs no hardware.
 
 - Stdlib only in the client core (`src/espilon_probe/`). A new third-party dependency needs a
   clear justification and, ideally, lives behind an optional extra, not the core.
-- The client stays generalist: no challenge, flag, device, or course knowledge in the client.
-  It speaks the wire protocol and drives backends, nothing more.
+- The client stays generalist: no target-specific content in the client. It speaks the wire
+  protocol and drives backends, nothing more.
 - Keep the suite green. If you change behavior, add or update tests. Do not weaken a test to
   make it pass.
 - Security-sensitive code (parsers facing untrusted input, anything that handles a target's

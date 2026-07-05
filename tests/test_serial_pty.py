@@ -2,7 +2,7 @@
 
 A pty pair is a real serial line from the OS point of view. A tiny UART device runs on the
 master end; the SerialBackend drives the slave end with the same `uart read`/`uart write`
-verbs the virtual lab uses.
+verbs the virtual backend uses.
 """
 
 import os
@@ -13,7 +13,7 @@ import time
 from espilon_probe.backends.serial import SerialBackend
 from espilon_probe.protocols import uart
 
-FLAG = "ESPILON{serial_pty_real}"
+SECRET = "SECRET-serial-pty-token"
 
 
 def _uart_device(master_fd: int):
@@ -30,7 +30,7 @@ def _uart_device(master_fd: int):
             line, _, buf = buf.partition(b"\n")
             cmd = line.strip()
             if cmd == b"printenv":
-                os.write(master_fd, b"bootcmd=run distro_bootcmd\nsecret=" + FLAG.encode() + b"\n")
+                os.write(master_fd, b"bootcmd=run distro_bootcmd\nsecret=" + SECRET.encode() + b"\n")
             elif cmd == b"exit":
                 return
             else:
@@ -49,11 +49,11 @@ def test_serial_pty_roundtrip():
         # banner/ordinary command leaks nothing
         uart.write(b, b"help\n")
         time.sleep(0.05)
-        assert b"ESPILON{" not in uart.read(b)
-        # the privileged command leaks the flag over the real line
+        assert b"SECRET-" not in uart.read(b)
+        # the privileged command leaks the secret over the real line
         uart.write(b, b"printenv\n")
         time.sleep(0.05)
-        assert FLAG.encode() in uart.read(b)
+        assert SECRET.encode() in uart.read(b)
     finally:
         b.close()
         os.close(master)

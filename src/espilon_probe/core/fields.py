@@ -1,7 +1,7 @@
 """Conservative coercion of backend-supplied response fields.
 
-A backend response is partly attacker-influenced on a lab bridge (the player drives some of
-what the target returns). The protocol layer must never let a malformed field surface a raw
+A backend response is partly attacker-influenced with a remote target server (a peer drives
+some of what the target returns). The protocol layer must never let a malformed field surface a raw
 Python error (a `ValueError` from `int(...)`, an `AttributeError` from `.get()` on a non-dict):
 it interprets the field authoritatively or refuses loud with a `ProbeError`. These helpers are
 the single, sound place that judgement lives, so every protocol module coerces the same way.

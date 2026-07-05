@@ -1,7 +1,7 @@
 # probe wire protocol (draft)
 
-Spoken between the `virtual` backend (player side) and the lab bridge (server side) over
-TCP. Agnostic at the transport so one bridge core serves every protocol; protocol
+Spoken between the `virtual` backend (client side) and a target server (server side) over
+TCP. Agnostic at the transport so one server core serves every protocol; protocol
 meaning lives in the client `protocols/`, not here.
 
 ## Session
@@ -10,7 +10,7 @@ meaning lives in the client `protocols/`, not here.
 2. `HELLO` handshake: version negotiation.
 3. `CAPABILITIES` from server: `{protocol, channels, verbs, meta}` (drives `probe info`).
 
-## Messages (shape, to be finalized in Phase 1)
+## Messages (shape)
 
 Two logical channels over the one connection:
 
@@ -33,8 +33,8 @@ pcap with the protocol's DLT; analysis is done by the operator's stock tools.
 
 ## Notes
 
-- Framing: length-prefixed messages; encoding TBD (CBOR or length-prefixed JSON + raw
-  bytes side-channel). Decide in Phase 1, keep it boring.
-- Auth: per-session port allocation + network isolation by `lab_runtime`; no token in v1.
+- Framing: length-prefixed messages (length-prefixed JSON with a raw bytes side-channel).
+- Auth: transport-level (per-session endpoint allocation and network isolation) is the
+  deployment's responsibility; no application token in v1.
 - The same envelope is what a real backend produces locally, so `protocols/` code is shared
   across virtual and real.

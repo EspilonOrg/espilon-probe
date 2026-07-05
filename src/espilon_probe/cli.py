@@ -1,12 +1,12 @@
 """probe CLI - parse, select a backend, dispatch verbs, print results.
 
 Target selection:
-  - default backend `virtual`, reading the lab endpoint from ESP_PROBE (tcp://host:port)
-  - `--backend hci|killerbee|sdr|serial|openocd|ftdi|socketcan` selects a real adapter
-    (not implemented yet; Phase 3+).
+  - default backend `virtual`, reading the target endpoint from ESP_PROBE (tcp://host:port)
+  - `--backend socketcan|serial` selects a real adapter (implemented)
+  - `--backend hci|killerbee|sdr|openocd|ftdi` selects a real adapter (planned)
 
 Core verbs: info, scan, sniff, inject, replay
-Protocol verbs: gatt (BLE) - enum / read / write
+Protocol verbs: gatt (BLE), can, uart, jtag, spi, subghz
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ def _add_radio_args(p: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="probe", description="One CLI for the physical layer.")
     p.add_argument("--backend", default="virtual",
-                   help="virtual (lab, default) | hci | killerbee | sdr | serial | openocd | ftdi | socketcan")
+                   help="virtual (default) | hci | killerbee | sdr | serial | openocd | ftdi | socketcan")
     p.add_argument("--target", help="backend endpoint (default: ESP_PROBE for virtual)")
     p.add_argument("--baud", type=int, default=115200,
                    help="UART line rate (default 115200). On a real line a wrong baud is "
@@ -575,7 +575,7 @@ def main(argv: list[str] | None = None) -> int:
     except (ProbeError, wire.ProtocolError, RuntimeError, OSError, ValueError,
             AttributeError, TypeError, KeyError) as e:
         # AttributeError/TypeError/KeyError are a backstop: a malformed backend response is
-        # partly attacker-influenced on a lab bridge, and the protocol layer must already
+        # partly attacker-influenced with a remote target, and the protocol layer must already
         # refuse it cleanly. If any future path still lets a malformed dict through, it
         # surfaces here as a clean `probe: ...` line, never a raw traceback.
         raise SystemExit(f"probe: {e}")

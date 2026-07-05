@@ -1,9 +1,8 @@
 # Protocol design conventions (cross-cutting)
 
-Shared rules every protocol module must obey. The three new virtual protocols (JTAG, SPI,
-sub-GHz) are designed against these from the start; the existing four (BLE, CAN, UART,
-Zigbee) are being retrofitted to them after the adversarial review. Read this before the
-per-protocol docs (`protocol-jtag.md`, `protocol-spi.md`, `protocol-subghz.md`).
+Shared rules every protocol module must obey. All seven protocols (BLE, CAN, UART, Zigbee,
+JTAG, SPI, sub-GHz) follow these. Read this before the per-protocol docs
+(`protocol-jtag.md`, `protocol-spi.md`, `protocol-subghz.md`).
 
 ## 1. `capabilities()` is the gate
 
@@ -24,7 +23,7 @@ the backend does not need to enumerate every sub-verb in `verbs`.
 
 ## 2. One clean error type: `ProbeError`
 
-NEW shared type to add in `core/` (probe-dev item, see contract-evolution below):
+Shared error type in `core/` (see contract-evolution below):
 
 ```python
 # core/errors.py
@@ -57,7 +56,7 @@ def _require_verb(caps, verb):           # cli.py
 
 This keeps the gate in ONE place and out of every backend. Backends still refuse defensively
 (an `op()` for an unknown verb returns/raises a clean error), but the CLI gate is the
-primary, course-content-free guard.
+primary, content-agnostic guard.
 
 ## 3. Shape taxonomy: PACKET vs BYTE-STREAM vs TRANSACTION/REGISTER
 
@@ -144,8 +143,7 @@ structured dict response. They route through `op()` over the existing wire `OP`/
 messages. NO new contract method (no `transaction()`), NO new wire message type is required
 for JTAG/SPI to function.
 
-What IS needed (contract-evolution items, flagged for probe-dev, none are blockers for a
-first lab):
+What IS needed (contract-evolution items, none are blockers for a first target):
 
 - C1. Add `core/errors.py::ProbeError` and wire the CLI catch + `_require_verb` gate (rule 2).
 - C2. Add a `shape` field to `Capabilities` (`"packet" | "stream" | "transaction"`) so the

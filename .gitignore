@@ -10,5 +10,7 @@ venv/
 *.cap
 .DS_Store
 
-# local agent roster / Claude config - never tracked
+# local agent/editor config - never tracked
 .claude/
+.idea/
+.vscode/

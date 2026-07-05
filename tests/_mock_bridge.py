@@ -1,9 +1,8 @@
 """A tiny wire-protocol server for testing the generalist client in isolation.
 
-This is NOT the lab bridge (that lives in the private content repo). It is a ~40-line test
-fixture that speaks core/wire.py: handshake then a caller-supplied `respond(msg)->reply`.
-It lets us test the virtual backend and the CLI against the protocol without any device or
-challenge code in the tool repo.
+This is a ~40-line test fixture that speaks core/wire.py: handshake then a caller-supplied
+`respond(msg)->reply`. It lets us test the virtual backend and the CLI against the protocol
+without any real target server in the tool repo.
 """
 
 from __future__ import annotations
@@ -48,7 +47,7 @@ def serve_mock(caps: dict, respond, host: str = "127.0.0.1", captured: dict | No
 
 
 def gatt_respond(state: dict):
-    """A scripted GATT device for CLI/client tests: write flips state['value'] to the flag."""
+    """A scripted GATT device for CLI/client tests: write flips state['value'] to the secret."""
     chars = [{"handle": 0x0011, "uuid": "fff1", "props": "read,notify"},
              {"handle": 0x0014, "uuid": "fff2", "props": "write"}]
 

@@ -1,19 +1,32 @@
 [project]
 name = "espilon-probe"
 version = "0.1.0"
-description = "One CLI for the physical layer (RF + hardware buses), same commands in lab and on real hardware."
+description = "One CLI for the physical layer (RF + hardware buses), same commands against a virtual target and on real hardware."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
 authors = [{ name = "Espilon" }]
-keywords = ["security", "rf", "ble", "zigbee", "can", "uart", "hardware", "pentest", "sdr"]
+keywords = ["security", "rf", "ble", "zigbee", "can", "uart", "jtag", "spi", "hardware", "pentest", "sdr"]
 classifiers = [
+    "Development Status :: 4 - Beta",
     "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Security",
+    "Topic :: System :: Hardware",
     "Environment :: Console",
 ]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/EspilonOrg/espilon-probe"
+Repository = "https://github.com/EspilonOrg/espilon-probe"
+Issues = "https://github.com/EspilonOrg/espilon-probe/issues"
+Changelog = "https://github.com/EspilonOrg/espilon-probe/blob/main/CHANGELOG.md"
 
 [project.scripts]
 probe = "espilon_probe.cli:main"
