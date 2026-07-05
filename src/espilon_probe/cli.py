@@ -208,6 +208,35 @@ def _hex_field(value, field: str) -> bytes:
     return _hex_bytes(value if value else "", field)
 
 
+def _report_write(res, what: str = "write") -> None:
+    """Render a protocol write result, or raise a clean `ProbeError` on a rejected write.
+
+    A successful write prints `ok` (plus any extra fields the backend returned). A rejected
+    write used to be dumped as a raw Python dict (`{'ok': False, 'addr': 1073741828}`); instead
+    we raise a one-line operator error (`write rejected at 0x40000004`, plus a reason when the
+    backend supplies one) so the CLI exits nonzero with an honest message rather than leaking a
+    repr. A non-dict result is refused loud, never coerced.
+    """
+    if not isinstance(res, dict):
+        raise ProbeError(f"backend returned a non-object {what} result: {res!r}")
+    if res.get("ok"):
+        extra = {k: val for k, val in res.items() if k != "ok"}
+        print("ok" + (f" {extra}" if extra else ""))
+        return
+    from .core.fields import as_int
+    msg = f"{what} rejected"
+    addr = res.get("addr")
+    if addr is not None:
+        try:
+            msg += f" at 0x{as_int(addr, 'addr'):08x}"
+        except ProbeError:
+            msg += f" at {addr!r}"
+    reason = res.get("reason") or res.get("error") or res.get("msg")
+    if reason:
+        msg += f" ({reason})"
+    raise ProbeError(msg)
+
+
 def _fmt_value(hexstr, field: str = "value") -> str:
     raw = _hex_field(hexstr, field)
     try:
@@ -237,6 +266,38 @@ _VERB_REQUIRES = {
 # gate on the underlying core verb rather than a "can" group that backends do not advertise.
 _CAN_REQUIRES = {"send": "inject", "dump": "sniff"}
 
+# Each protocol's own action-verb group, as the CLI exposes it. `probe info` renders this
+# verb alongside the core verbs so the surface is uniform across protocols; a protocol with
+# no group verb (zigbee is pure packet) simply has no entry here.
+_PROTOCOL_VERB = {
+    "ble": "gatt",
+    "can": "can",
+    "uart": "uart",
+    "jtag": "jtag",
+    "spi": "spi",
+    "subghz": "subghz",
+}
+
+
+def _info_verbs(caps) -> list[str]:
+    """The verb list `probe info` prints: deduplicated, with the protocol's own verb present.
+
+    The advertised `caps.verbs` can arrive with duplicates (a sloppy bridge once sent
+    `scan,...,scan,jtag`) or missing the protocol's group verb (a CAN bridge advertises only
+    the core verbs, yet `probe can` is a real command). We render a stable, honest surface:
+    keep the advertised order, drop repeats, and append the protocol's own action verb when it
+    is not already listed. This is a display normalization only; the capability gate
+    (`_require_verb`) still runs against the raw advertised verbs.
+    """
+    verbs: list[str] = []
+    for v in caps.verbs:
+        if v not in verbs:
+            verbs.append(v)
+    own = _PROTOCOL_VERB.get(caps.protocol)
+    if own and own not in verbs:
+        verbs.append(own)
+    return verbs
+
 
 def _require_verb(caps, verb: str) -> None:
     """Hard-error clean if `verb` is not advertised by the protocol's capabilities.
@@ -263,7 +324,7 @@ def _dispatch(args, b) -> int:
     if v == "info":
         c = b.capabilities()
         print(f"backend: {c.transport}   protocol: {c.protocol}   shape: {c.shape}   "
-              f"channels: {','.join(map(str, c.channels))}   verbs: {','.join(c.verbs)}")
+              f"channels: {','.join(map(str, c.channels))}   verbs: {','.join(_info_verbs(c))}")
     elif v == "scan":
         # For the transaction protocols, `scan` is repurposed as a bus enumerate routed
         # through op() (jtag scan-chain / spi JEDEC-ID), so the protocol module produces the
@@ -302,7 +363,9 @@ def _dispatch(args, b) -> int:
     elif v == "can":
         from .protocols import can
         if args.can_cmd == "send":
-            can.send(b, int(args.id, 0), args.data)
+            can_id = _parse_int(args.id, "arbitration id")
+            _parse_hex(args.data, "hex payload")   # validate operator hex at source, clean error
+            can.send(b, can_id, args.data)
             print("sent")
         elif args.can_cmd == "dump":
             n = b.sniff(args.write, count=args.count, seconds=args.seconds)
@@ -320,15 +383,16 @@ def _dispatch(args, b) -> int:
                 print(f"0x{c['handle']:04x}  {c['uuid']}  {c['props']}")
         elif args.gatt_cmd == "read":
             h = _resolve_handle(b, args.handle)
-            print(_fmt_value(ble.gatt_read(b, h).get("value", ""), "gatt.read value"))
+            res = ble.gatt_read(b, h)
+            # An unreadable/unknown handle must not print a silent empty line. We require an
+            # authoritative `value` key: a result that omits it is refused loud rather than
+            # rendered as an empty read (which is indistinguishable from a real empty value).
+            if not isinstance(res, dict) or "value" not in res:
+                raise ProbeError(f"no such handle 0x{h:04x} (handle not readable)")
+            print(_fmt_value(res.get("value", ""), "gatt.read value"))
         elif args.gatt_cmd == "write":
             h = _resolve_handle(b, args.handle)
-            res = ble.gatt_write(b, h, args.value)
-            if res.get("ok"):
-                extra = {k: v for k, v in res.items() if k != "ok"}
-                print("ok" + (f" {extra}" if extra else ""))
-            else:
-                print(str(res))
+            _report_write(ble.gatt_write(b, h, args.value), "write")
     elif v == "jtag":
         _dispatch_jtag(args, b)
     elif v == "spi":
@@ -419,8 +483,7 @@ def _dispatch_jtag(args, b) -> None:
     elif cmd == "write":
         addr = _parse_int(args.addr, "address")
         word = _parse_int(args.word, "word")
-        r = jtag.write(b, addr, word)
-        print("ok" if r.get("ok") else str(r))
+        _report_write(jtag.write(b, addr, word), "write")
     elif cmd == "reg":
         r = jtag.reg(b, name=args.name)
         regs = r.get("regs")
@@ -454,12 +517,10 @@ def _dispatch_spi(args, b) -> None:
     elif cmd == "write":
         addr = _parse_int(args.addr, "address")
         _parse_hex(args.hex, "spi write --hex")     # validate operator hex at source, clean error
-        r = spi.write(b, addr, args.hex, cs=args.cs)
-        print("ok" if r.get("ok") else str(r))
+        _report_write(spi.write(b, addr, args.hex, cs=args.cs), "write")
     elif cmd == "reg":
         if args.write is not None:
-            r = spi.reg(b, args.name, value_hex=args.write, cs=args.cs)
-            print("ok" if r.get("ok") else str(r))
+            _report_write(spi.reg(b, args.name, value_hex=args.write, cs=args.cs), "register write")
         else:
             r = spi.reg(b, args.name, cs=args.cs)
             print(f"{r.get('name', args.name)} = {r.get('value', '')}")
