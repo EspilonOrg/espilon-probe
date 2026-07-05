@@ -6,6 +6,40 @@ these become the commit messages.
 
 ---
 
+## 023 - fix(virtual): stop client-sent SNIFF_END + drain the bridge marker (persistent-session desync)
+
+QA found a client/bridge protocol skew on a PERSISTENT connection that sniffs then continues.
+Both are tool-side, in `backends/virtual.py`; the wire protocol and the bridge are unchanged.
+
+- ROOT CAUSE (Fix A): after a capture the client sent a courtesy OUTBOUND `SNIFF_END` to "tell
+  the bridge to stop". It is not load-bearing: the bridge does not read while it streams a
+  capture (an inbound stop cannot end one early), and the capture is already bounded on both
+  sides by `count`/`seconds`, with the bridge terminating it via its OWN inbound `SNIFF_END`.
+  Older packaged bridges do not know that message type and answer `unknown message type:
+  sniff_end`; that stray error frame then desyncs the next op on a persistent connection
+  (a fresh-connection-per-call was unaffected, which is why smoke passed). FIX: the client no
+  longer sends it - `SNIFF_END` is inbound-only, so no bridge, old or new, ever sees it.
+- SECOND CONTRIBUTOR: in the `count` case the client broke at its bound WITHOUT consuming the
+  bridge's own terminating `SNIFF_END`, leaving it queued to be misread by the next op. Added a
+  bounded `_drain_sniff_end()` that consumes the single trailing marker (already buffered from
+  the same burst, so the wait is effectively zero) so a persistent session stays aligned; the
+  wait is capped (`SNIFF_END_DRAIN_GRACE`) so a bridge that omits the marker cannot wedge us.
+  Documented limit: a `seconds`-bounded capture stopped mid-stream is realigned best-effort.
+- TEST: `test_sniff_then_op_on_persistent_connection_does_not_desync` runs a persistent
+  connection against a mock OLDER bridge (streams a count-bounded capture + its own SNIFF_END,
+  serves an op, and REJECTS any inbound `sniff_end`). It asserts the follow-up op returns its
+  own result and that the client put no `sniff_end` on the wire.
+
+## 023b - test(spi): lock the spi.reg WRITE success shape (`_report_write` verified safe)
+
+Verified against the kit SPI contract (`kit/protocols/spi.py::FlashModel.reg`): a successful
+`spi.reg` WRITE returns `{"ok": True, "name": ...}` (a READ returns `{"name", "value"}` with no
+`ok`). So the earlier `_report_write` change (any result lacking `ok: True` is a fail-loud
+reject) is CORRECT for spi reg writes - the spi-flash-unlock WRSR step (`probe spi reg status
+--write 00`) renders as success, not "register write rejected". No code change; added two guards:
+one that a `{"ok": True, ...}` reg-write success is not rejected, one that a genuine `{"ok":
+False, ...}` reject still fails loud.
+
 ## 022 - fix(cli): uniform `probe info` verbs + clean write/hex/handle errors (10/10 polish)
 
 Blind-QA docked spi/jtag/can/uart boxes below 10/10 on three CLI-formatting nits. All

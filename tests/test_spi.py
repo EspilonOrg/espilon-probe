@@ -57,6 +57,55 @@ def _spi_respond(flash):
     return respond
 
 
+def _spi_reg_respond(regs):
+    """A scripted register file. A `spi.reg` WRITE returns the kit's success shape
+    `{"ok": True, "name": ...}`; a READ returns `{"name", "value"}` (no `ok`). A write to a
+    read-only register name is rejected with `{"ok": False, ...}` so both paths are exercised.
+    """
+    def respond(msg):
+        if msg.get("t") != wire.OP or msg.get("verb") != "spi.reg":
+            return wire.error("unhandled")
+        a = msg.get("args", {})
+        name = a.get("name")
+        if "value" not in a:                       # READ
+            return {"t": wire.OP_RESULT, "result": {"name": name, "value": regs.get(name, "")}}
+        if name == "locked":                       # WRITE rejected (read-only)
+            return {"t": wire.OP_RESULT, "result": {"ok": False, "name": name,
+                                                    "reason": "register is read-only"}}
+        regs[name] = a["value"]                     # WRITE accepted
+        return {"t": wire.OP_RESULT, "result": {"ok": True, "name": name}}
+
+    return respond
+
+
+def test_spi_reg_write_success_shape_is_not_rejected(capsys):
+    # spi-flash-unlock's WRSR step (`probe spi reg status --write 00`): the kit returns
+    # {"ok": True, "name": "status"} on a successful reg write. _report_write must render that as
+    # success, NOT as "register write rejected". Regression guard for the flag-gating unlock.
+    srv, port = serve_mock(SPI_CAPS, _spi_reg_respond({"status": "3c"}))
+    try:
+        out = _run(["spi", "reg", "status", "--write", "00"], port, capsys)
+        assert out.startswith("ok")
+        assert "rejected" not in out
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_spi_reg_write_genuine_reject_still_fails_loud(capsys):
+    # A real reject ({"ok": False, ...}) must still exit nonzero with an honest one-line message,
+    # not print a raw dict. The two paths must not be conflated.
+    srv, port = serve_mock(SPI_CAPS, _spi_reg_respond({}))
+    try:
+        with pytest.raises(SystemExit) as ei:
+            _run(["spi", "reg", "locked", "--write", "01"], port, capsys)
+        assert "register write rejected" in str(ei.value)
+        assert "read-only" in str(ei.value)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 def test_capabilities_verb_set():
     assert "scan" in SPI_CAPS["verbs"] and "spi" in SPI_CAPS["verbs"]
     for gated in ("sniff", "inject", "replay"):
