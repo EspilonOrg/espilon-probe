@@ -1,0 +1,16 @@
+{
+  "name": "gatt-smoke",
+  "protocol": "ble",
+  "description": "BLE GATT TRANSACTION-shape pilot over the SHIPPED client: the VIRTUAL leg (--backend virtual) drives the GattServer model through the generic _serve_op path. Proves one semantic op == one client-observable result: enum lists the pinned characteristic table; fw_version is the always-readable banner-analogue; the static permission errors render as ATT 0x02 (read of the write-only unlock) and 0x03 (write of the read-only fw_version) with a nonzero exit; the secret reads the LOCKED sentinel (00000000) until a CORRECT-key unlock write flips it to the staged value, and a WRONG-key write neither errors nor unlocks (retry-with-the-right-key). The unlock key is course-FIXED (01020304), so it is in diff scope. Values <= 20 bytes (single-characteristic scope: no Read Blob, no notifications, no SMP). ATT errors are rendered to stderr (asserted via `expect_stderr`); values/acks to stdout (`expect`). `exit` pins each step's expected exit code. The real AX201<->ESP32 diff is a gated spot-check (no software BLE loopback); this virtual leg is the CI gate.",
+  "steps": [
+    {"argv": ["gatt", "enum"], "expect": ["0x0003", "0x0006", "0x0008", "read", "write"], "exit": 0},
+    {"argv": ["gatt", "read", "0x0003"], "expect": ["pilot-1"], "exit": 0},
+    {"argv": ["gatt", "read", "0x0006"], "expect_stderr": ["ATT error 0x02", "Read Not Permitted"], "exit": 1},
+    {"argv": ["gatt", "write", "0x0003", "01"], "expect_stderr": ["ATT error 0x03", "Write Not Permitted"], "exit": 1},
+    {"argv": ["gatt", "read", "0x0008"], "expect": ["00000000"], "exit": 0},
+    {"argv": ["gatt", "write", "0x0006", "aabbccdd"], "expect": ["ok"], "exit": 0},
+    {"argv": ["gatt", "read", "0x0008"], "expect": ["00000000"], "exit": 0},
+    {"argv": ["gatt", "write", "0x0006", "01020304"], "expect": ["ok"], "exit": 0},
+    {"argv": ["gatt", "read", "0x0008"], "expect": ["pilot-secret"], "exit": 0}
+  ]
+}

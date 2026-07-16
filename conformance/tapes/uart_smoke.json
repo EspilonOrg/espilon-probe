@@ -1,0 +1,20 @@
+{
+  "name": "uart-smoke",
+  "protocol": "uart",
+  "description": "UART RAW-STREAM pilot over the SHIPPED clients: virtual (--backend virtual) vs real (--backend serial --target <pty>). Proves virtual == real on byte content + order + exit code, AND that the banner and each command response are actually present (expect). Exercises the REAL Enter path: the console dispatches on CR (0x0d - what a terminal and probe's default --eol cr send). Covers bare CR, CRLF (collapsed to one dispatch), and bare LF (tolerated). NOTE: the runner captures stdout with universal newlines, so a device \\r\\n reads back as \\n here; the byte-exact \\r\\n is asserted at the model level in tests/test_conformance_uart.py. Baud garble is out of pty scope (no bit clock).",
+  "steps": [
+    {"argv": ["uart", "read", "-t", "1"], "expect": ["=== espilon uart console (pilot) ===\nboot> "]},
+    {"argv": ["uart", "write", "help\r"], "expect": ["wrote 5 byte(s)"]},
+    {"argv": ["uart", "read", "-t", "1"], "expect": ["help\ncommands: help printenv echo <text>\nboot> "]},
+    {"argv": ["uart", "write", "printenv\r\n"], "expect": ["wrote 10 byte(s)"]},
+    {"argv": ["uart", "read", "-t", "1"], "expect": ["printenv\nbootcmd=run distro_bootcmd\nbaudrate=115200\nver=pilot-1\nboot> "]},
+    {"argv": ["uart", "write", "echo hello-uart\n"], "expect": ["wrote 16 byte(s)"]},
+    {"argv": ["uart", "read", "-t", "1"], "expect": ["echo hello-uart\nhello-uart\nboot> "]},
+    {"argv": ["uart", "write", "bogusdev\r"], "expect": ["wrote 9 byte(s)"]},
+    {"argv": ["uart", "read", "-t", "1"], "expect": ["bogusdev\nunknown command: bogusdev\nboot> "]},
+    {"argv": ["uart", "send", "help", "-t", "1"], "expect": ["help\ncommands: help printenv echo <text>\nboot> "]},
+    {"argv": ["uart", "send", "echo hello-send", "-t", "1"], "expect": ["echo hello-send\nhello-send\nboot> "]},
+    {"argv": ["uart", "send", "printenv", "--eol", "crlf", "-t", "1"], "expect": ["printenv\nbootcmd=run distro_bootcmd\nbaudrate=115200\nver=pilot-1\nboot> "]},
+    {"argv": ["uart", "read", "-t", "0.3"], "expect": []}
+  ]
+}
