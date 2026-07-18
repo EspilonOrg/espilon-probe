@@ -213,3 +213,104 @@ def test_dribbling_target_does_not_hang_the_read():
         assert data                                          # it did read the dribble, then stopped
     finally:
         srv.shutdown(); srv.server_close()
+
+
+def _serve_flood(byte=b"A", host="127.0.0.1"):
+    """A hostile bridge that, after the raw upgrade, floods `byte`*4096 in a tight loop FOREVER (a
+    line that never goes idle), so an unbounded drain would balloon to GBs before the time cap trips."""
+    import socketserver
+    import threading
+
+    class _Srv(socketserver.ThreadingTCPServer):
+        allow_reuse_address = True
+        daemon_threads = True
+
+    class _H(socketserver.StreamRequestHandler):
+        def handle(self):
+            r, w = self.rfile, self.wfile
+            if not wire.decode(r):
+                return
+            wire.send(w, wire.welcome(UART_CAPS))
+            msg = wire.decode(r)
+            if not msg or msg.get("t") != wire.STREAM_ATTACH:
+                return
+            wire.send(w, wire.stream_ready())
+            sock = self.connection
+            try:
+                while True:
+                    sock.sendall(byte * 4096)
+            except OSError:
+                return
+
+    srv = _Srv((host, 0), _H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, srv.server_address[1]
+
+
+def test_flooding_target_read_is_byte_bounded(monkeypatch):
+    # Finding 1 (MAJOR): a flooding line must not balloon one read to hundreds of MB / GB. The read
+    # is bounded in SIZE (ESP_PROBE_MAX_READ_BYTES / UART_READ_MAX_BYTES), so it returns EXACTLY the
+    # ceiling and promptly, never the ~2.6 GB the pre-fix drain accumulated.
+    import time
+    from espilon_probe.core.backend import UART_READ_DRAIN_CAP
+    monkeypatch.setenv("ESP_PROBE_MAX_READ_BYTES", "65536")
+    srv, port = _serve_flood()
+    try:
+        with VirtualBackend(f"tcp://127.0.0.1:{port}") as b:
+            start = time.monotonic()
+            data = b.stream_read(1.0)
+            elapsed = time.monotonic() - start
+        assert len(data) == 65536                            # clamped to the ceiling, not GBs
+        assert elapsed < 1.0 + UART_READ_DRAIN_CAP + 1.0     # returned promptly, did not hang
+    finally:
+        srv.shutdown(); srv.server_close()
+
+
+def test_flood_defaults_to_the_few_mb_ceiling(monkeypatch):
+    # With no override the ceiling is the built-in UART_READ_MAX_BYTES (a few MB), not unbounded.
+    from espilon_probe.core.backend import UART_READ_MAX_BYTES
+    monkeypatch.delenv("ESP_PROBE_MAX_READ_BYTES", raising=False)
+    srv, port = _serve_flood()
+    try:
+        with VirtualBackend(f"tcp://127.0.0.1:{port}") as b:
+            data = b.stream_read(0.3)
+        assert len(data) == UART_READ_MAX_BYTES
+    finally:
+        srv.shutdown(); srv.server_close()
+
+
+def test_malformed_or_nonpositive_ceiling_falls_back_to_default(monkeypatch):
+    # The size bound is load-bearing: a malformed / non-positive override must NOT disable it (no
+    # "0 = unbounded" escape hatch), it falls back to the safe default.
+    from espilon_probe.backends.virtual import _max_read_bytes
+    from espilon_probe.core.backend import UART_READ_MAX_BYTES
+    for bad in ("0", "-5", "notanumber", ""):
+        monkeypatch.setenv("ESP_PROBE_MAX_READ_BYTES", bad)
+        assert _max_read_bytes() == UART_READ_MAX_BYTES
+    monkeypatch.setenv("ESP_PROBE_MAX_READ_BYTES", "0x10000")
+    assert _max_read_bytes() == 0x10000                      # a valid positive override is honoured
+
+
+def test_uart_read_cli_streams_and_is_bounded(monkeypatch, capsys):
+    # The `uart read` CLI writes to stdout INCREMENTALLY and is size-bounded end-to-end: a flooding
+    # line yields exactly the ceiling of decoded bytes, never a runaway buffer.
+    from espilon_probe import cli
+    monkeypatch.setenv("ESP_PROBE_MAX_READ_BYTES", "65536")
+    srv, port = _serve_flood()
+    try:
+        monkeypatch.setenv("ESP_PROBE", f"tcp://127.0.0.1:{port}")
+        assert cli.main(["uart", "read", "-t", "1"]) == 0
+        out = capsys.readouterr().out
+        assert len(out) == 65536
+        assert set(out) == {"A"}
+    finally:
+        srv.shutdown(); srv.server_close()
+
+
+def test_uart_read_incremental_decoder_handles_split_multibyte():
+    # The incremental UTF-8 decoder must not corrupt a multi-byte char split across recv chunks:
+    # feeding the two halves of a 'e-acute' (0xC3 0xA9) in separate chunks yields the single char.
+    import codecs
+    dec = codecs.getincrementaldecoder("utf-8")("replace")
+    out = dec.decode(b"a\xc3") + dec.decode(b"\xa9b") + dec.decode(b"", final=True)
+    assert out == "aéb"

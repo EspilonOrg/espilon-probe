@@ -18,7 +18,13 @@ import struct
 import time
 
 from ..core import wire
-from ..core.backend import UART_READ_DRAIN_CAP, UART_READ_IDLE_GAP, Backend, Capabilities
+from ..core.backend import (
+    UART_READ_DRAIN_CAP,
+    UART_READ_IDLE_GAP,
+    UART_READ_MAX_BYTES,
+    Backend,
+    Capabilities,
+)
 from ..core.errors import ProbeError
 
 # Client-side ceiling for a single request/response transaction (info/scan/inject/replay and
@@ -64,6 +70,35 @@ def _txn_timeout() -> float | None:
     return val if val > 0 else None
 
 
+def _as_list(value) -> list:
+    """A capabilities field that the contract says is a LIST (verbs / channels), coerced.
+
+    A conformant bridge sends a JSON array. A non-list value - a bare string, an object, null - is
+    coerced to the EMPTY list rather than trusted: a lying/sloppy bridge that sends `verbs` as the
+    string "uart" would otherwise pass the substring-based capability gate (`"uart" in "scan,uart"`)
+    and drive `probe info` char-by-char. Refusing (empty) is the conservative direction: an
+    unadvertised verb fails loud instead of being silently granted by a string membership accident."""
+    return value if isinstance(value, list) else []
+
+
+def _max_read_bytes() -> int:
+    """The byte ceiling for a single stream read/drain, in bytes.
+
+    Reads ESP_PROBE_MAX_READ_BYTES when set (a positive int, decimal or 0x hex); a malformed or
+    non-positive override falls back to UART_READ_MAX_BYTES rather than silently removing the
+    ceiling. The size bound is load-bearing against a flooding line (a memory-DoS) and must never be
+    disabled by a typo, so - unlike the txn timeout - there is no "value <= 0 means unbounded" escape
+    hatch here."""
+    raw = os.environ.get("ESP_PROBE_MAX_READ_BYTES")
+    if raw is None:
+        return UART_READ_MAX_BYTES
+    try:
+        val = int(raw, 0)
+    except (ValueError, TypeError):
+        return UART_READ_MAX_BYTES
+    return val if val > 0 else UART_READ_MAX_BYTES
+
+
 class StreamChannel:
     """A thin, stdlib-only duplex wrapper over an attached raw byte pipe.
 
@@ -107,9 +142,21 @@ class StreamChannel:
         self._sock.sendall(data)
         return len(data)
 
-    def drain(self, timeout: float) -> bytes:
+    def drain(self, timeout: float, max_bytes: int | None = None) -> bytes:
         """Wait up to `timeout` for the first byte, then drain until one UART_READ_IDLE_GAP of idle.
         An empty result on a silent line is not an error.
+
+        A thin buffering front over `drain_into`: accumulate the drained chunks and return them as
+        one `bytes`. It carries the same bounds (see `drain_into`); a caller that must not hold the
+        whole read in memory (e.g. `uart read` -> stdout) uses `drain_into` with a streaming sink."""
+        chunks: list[bytes] = []
+        self.drain_into(timeout, chunks.append, max_bytes=max_bytes)
+        return b"".join(chunks)
+
+    def drain_into(self, timeout: float, sink, max_bytes: int | None = None) -> int:
+        """The ONE drain algorithm: wait up to `timeout` for the first byte, then read until the
+        line is idle for one UART_READ_IDLE_GAP, feeding each received chunk to `sink(bytes)` as it
+        arrives. Returns the number of bytes drained.
 
         `-t 0` is a BOUNDED poll, not a zero-wait: it still waits up to one idle gap for the first
         byte. This is deliberate and load-bearing for NON-DESTRUCTIVENESS: a bridge hands device
@@ -120,31 +167,53 @@ class StreamChannel:
         in the FIFO for the next read). A too-short `-t` is floored to the idle gap for the same
         reason.
 
-        BOUNDED IN TOTAL: the whole read (first-byte wait + drain) returns within
+        BOUNDED IN TIME: the whole read (first-byte wait + drain) returns within
         `timeout + UART_READ_DRAIN_CAP`. Without the cap a target dribbling one byte faster than the
         idle gap would keep the drain from ever elapsing and hang the read forever.
 
-        The drain loop keeps reading until the socket is quiet for one idle gap, so by the time it
-        returns every byte the bridge sent has been received (nothing is stranded in the socket
-        buffer for the close to discard).
+        BOUNDED IN SIZE: at most `max_bytes` (default `_max_read_bytes()`, override
+        ESP_PROBE_MAX_READ_BYTES) are drained. A flooding line that never goes idle would otherwise
+        let one read grow without bound (a memory-DoS); once the ceiling is reached the read stops
+        and returns, and the last chunk is clamped so the total is EXACTLY the ceiling, never over.
+
+        The drain loop keeps reading until the socket is quiet for one idle gap (or a bound trips),
+        so by the time it returns every byte the bridge sent that fits under the ceiling has been
+        received (nothing that fits is stranded in the socket buffer for the close to discard).
 
         Uses `select` + raw recv (never `settimeout` on the makefile, which poisons it after a
         timeout - "cannot read from timed out object" - and would break a second read on one
         connection). Any bytes the framed STREAM_READY recv buffered are consumed first."""
+        if max_bytes is None:
+            max_bytes = _max_read_bytes()
         start = time.monotonic()
         total_deadline = start + max(0.0, timeout) + UART_READ_DRAIN_CAP
         # First-byte wait is floored to one idle gap so an in-flight byte the bridge already sent is
         # received (not lost) even for `-t 0` / a too-short timeout.
         first_wait = max(max(0.0, timeout), UART_READ_IDLE_GAP)
-        chunks: list[bytes] = []
+        total = 0
+
+        def emit(data: bytes) -> bool:
+            """Feed `data` to the sink, clamped so the running total never exceeds the byte
+            ceiling. Returns True once the ceiling is reached (the caller must then stop reading)."""
+            nonlocal total
+            room = max_bytes - total
+            if len(data) > room:
+                data = data[:room]
+            if data:
+                sink(data)
+                total += len(data)
+            return total >= max_bytes
+
         backlog = self.take_backlog()
         if backlog:
-            chunks.append(backlog)
+            if emit(backlog):
+                return total
         else:
             first = self._select_recv(min(first_wait, total_deadline - time.monotonic()))
             if not first:
-                return b""
-            chunks.append(first)
+                return total
+            if emit(first):
+                return total
         while True:
             remaining = total_deadline - time.monotonic()
             if remaining <= 0:
@@ -152,8 +221,9 @@ class StreamChannel:
             more = self._select_recv(min(UART_READ_IDLE_GAP, remaining))
             if not more:
                 break
-            chunks.append(more)
-        return b"".join(chunks)
+            if emit(more):
+                break
+        return total
 
     def _select_recv(self, timeout: float) -> bytes:
         """One bounded raw read: wait up to `timeout` for readability, then a single recv. b"" on
@@ -260,7 +330,7 @@ class VirtualBackend(Backend):
     def capabilities(self) -> Capabilities:
         c = self._caps
         return Capabilities(protocol=c.get("protocol", ""), transport=self._transport_label,
-                            channels=c.get("channels", []), verbs=c.get("verbs", []),
+                            channels=_as_list(c.get("channels")), verbs=_as_list(c.get("verbs")),
                             shape=c.get("shape", "packet"), meta=c.get("meta", {}))
 
     def _txn(self, msg: dict, min_timeout: float | None = None) -> dict:
@@ -424,6 +494,12 @@ class VirtualBackend(Backend):
         `StreamChannel.drain`, so `uart read`, `uart send`, and the console share one read
         algorithm and cannot drift on how a read is bounded (see StreamChannel.drain)."""
         return self.stream_open("read").drain(timeout)
+
+    def stream_read_into(self, timeout: float, sink) -> int:
+        """Streaming read: attach in read mode and delegate to `StreamChannel.drain_into`, feeding
+        each drained chunk to `sink(bytes)` as it arrives rather than materializing the whole read.
+        Same time+size bounds as `stream_read` (see StreamChannel.drain_into)."""
+        return self.stream_open("read").drain_into(timeout, sink)
 
     def inject(self, frame: bytes, channel: int | None = None) -> None:
         self._txn({"t": wire.INJECT, "frame": frame.hex(), "channel": channel})

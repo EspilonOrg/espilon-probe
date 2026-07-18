@@ -24,8 +24,16 @@ def write(backend: Backend, data: bytes) -> int:
 def read(backend: Backend, timeout: float = UART_READ_TIMEOUT_DEFAULT) -> bytes:
     """Read from the line: block up to `timeout` for the first byte, then drain the line until it
     goes idle. Raw bytes; the caller decodes for display. An empty read on a silent line is not an
-    error."""
+    error. The read is size-bounded (see the backend drain), so a flooding line cannot make this
+    grow without bound."""
     return backend.stream_read(timeout)
+
+
+def read_into(backend: Backend, sink, timeout: float = UART_READ_TIMEOUT_DEFAULT) -> int:
+    """Streaming sibling of `read`: drain the line to `sink(bytes)` chunk-by-chunk as bytes arrive,
+    so a caller (e.g. `uart read` writing to stdout) never has to hold the whole read in memory at
+    once. Returns the number of bytes drained. Same time+size bounds as `read`."""
+    return backend.stream_read_into(timeout, sink)
 
 
 def send(backend: Backend, payload: bytes, timeout: float = UART_READ_TIMEOUT_DEFAULT,

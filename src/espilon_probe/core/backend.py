@@ -24,6 +24,15 @@ UART_READ_IDLE_GAP = 0.1
 # elapsing, so `uart read` would hang forever. With it, the total read is bounded by
 # `timeout + UART_READ_DRAIN_CAP`, so a chatty / dribbling / silent target always returns.
 UART_READ_DRAIN_CAP = 2.0
+# Hard cap on how MANY bytes a single stream read/drain may accumulate. The time cap above bounds
+# how LONG a read runs, but a line that floods faster than the drain returns (a chatty or hostile
+# bridge blasting data) would still let one read grow to hundreds of MB / GB before the time cap
+# trips - a memory-DoS. With this ceiling a read returns as soon as it has drained this many bytes,
+# so the read is bounded in SIZE as well as TIME. Overridable with ESP_PROBE_MAX_READ_BYTES (a
+# positive int, decimal or 0x hex); a malformed or non-positive override falls back to this default
+# rather than disabling the ceiling (the memory bound is load-bearing and must not be a typo away
+# from unbounded).
+UART_READ_MAX_BYTES = 8 * 1024 * 1024
 
 
 @dataclass
@@ -103,8 +112,23 @@ class Backend(abc.ABC):
     def stream_read(self, timeout: float) -> bytes:
         """Receive from the pipe, blocking up to `timeout` for the FIRST byte, then draining
         until the line is idle for one inter-byte gap. Empty result on a silent line is not
-        an error."""
+        an error. The read is bounded in TIME (timeout + UART_READ_DRAIN_CAP) and in SIZE
+        (UART_READ_MAX_BYTES), so a flooding line can neither hang nor exhaust memory."""
         raise ProbeError("this protocol is not a byte stream")
+
+    def stream_read_into(self, timeout: float, sink) -> int:
+        """Streaming sibling of `stream_read`: drain the line to `sink(bytes)` chunk-by-chunk as
+        the bytes arrive, so a caller (e.g. `uart read` writing to stdout) never has to hold the
+        whole read in memory at once. Returns the number of bytes drained. Same time+size bounds
+        as `stream_read`.
+
+        The default forwards to `stream_read` and hands the whole (already size-bounded) result to
+        the sink in one call, so every non-stream backend keeps working unchanged; a stream backend
+        overrides this to emit incrementally."""
+        data = self.stream_read(timeout)
+        if data:
+            sink(data)
+        return len(data)
 
     def __enter__(self) -> "Backend":
         self.open()

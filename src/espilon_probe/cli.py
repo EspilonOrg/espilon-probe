@@ -12,6 +12,7 @@ Protocol verbs: gatt (BLE), can, uart, jtag, spi, subghz
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import struct
 import sys
@@ -263,6 +264,41 @@ def _parse_hex(text: str, what: str = "hex") -> bytes:
         raise ProbeError(f"invalid {what} {text!r} (expected hex bytes, e.g. 0201 or deadbeef)")
 
 
+def _require_positive_seconds(val: float, label: str) -> float:
+    """A `-t/--seconds` window must be a POSITIVE, FINITE number of seconds, else a clean ProbeError.
+
+    Rejects <= 0, nan, and inf. A non-positive value silently captures nothing (`elapsed >= seconds`
+    is true at once, or never for a wall guard), and nan/inf never satisfy the stop conditions and
+    leak a raw stdlib error (e.g. `settimeout` on a nan/inf deadline). All three fail loud here
+    instead so an operator who fat-fingered the window is told, not left with a silent empty
+    capture."""
+    if math.isnan(val) or math.isinf(val) or val <= 0:
+        raise ProbeError(f"{label} must be a positive number of seconds (got {val:g})")
+    return val
+
+
+def _require_positive_count(val: int, label: str) -> int:
+    """A `-c/--count` early-stop must be > 0, else a clean ProbeError. A non-positive count stops the
+    capture before the first frame (`n >= count` holds at n=0), silently capturing nothing."""
+    if val <= 0:
+        raise ProbeError(f"{label} must be > 0 (got {val})")
+    return val
+
+
+def _capture_bounds(args) -> tuple[float | None, int | None]:
+    """Validate the `-t/--seconds` and `-c/--count` bounds a capture (`sniff` / `can dump`) was
+    given, returning the (seconds, count) to hand the backend. Either may be omitted (None); a value
+    that is present must be positive and finite, matching how `scan` validates its window, so a
+    non-positive / nan / inf bound fails loud rather than silently capturing nothing."""
+    seconds = getattr(args, "seconds", None)
+    count = getattr(args, "count", None)
+    if seconds is not None:
+        seconds = _require_positive_seconds(seconds, "-t/--seconds")
+    if count is not None:
+        count = _require_positive_count(count, "-c/--count")
+    return seconds, count
+
+
 def _scan_seconds(args, cfg: dict | None = None) -> float | None:
     """Resolve the scan listen window: the `-t/--seconds` flag, else `$ESP_PROBE_SCAN_SECS`, else
     the config file's `scan_secs`, else None (the medium's own default). Precedence is
@@ -288,9 +324,7 @@ def _scan_seconds(args, cfg: dict | None = None) -> float | None:
                 raise ProbeError(f"invalid {src} {raw!r} (expected seconds, e.g. 3 or 1.5)")
         else:
             return _cfg_scan_seconds(cfg)
-    if val <= 0:
-        raise ProbeError(f"{src} must be > 0 seconds (got {val:g})")
-    return val
+    return _require_positive_seconds(val, src)
 
 
 def _cfg_scan_seconds(cfg: dict | None) -> float | None:
@@ -443,9 +477,16 @@ def _require_verb(caps, verb: str) -> None:
     This is the single capability gate (convention C1). It runs BEFORE any protocol verb is
     routed, so an unsupported verb is a clean `ProbeError`, never a traceback from a backend
     that does not implement it.
+
+    `caps.verbs` MUST be a list for membership to be authoritative: a bare string would make
+    `verb in caps.verbs` a SUBSTRING test (`"uart" in "scan,uart"`), so a lying bridge could pass
+    the gate for a verb it never advertised. The virtual backend already coerces this to a list, but
+    the gate re-checks defensively - a non-list means "nothing advertised", refuse loud - so no
+    backend can ever route a verb past a substring accident.
     """
-    if verb not in caps.verbs:
-        supported = ", ".join(caps.verbs) or "(none)"
+    verbs = caps.verbs if isinstance(caps.verbs, list) else []
+    if verb not in verbs:
+        supported = ", ".join(str(x) for x in verbs) or "(none)"
         raise ProbeError(
             f"'{verb}' is not supported on protocol '{caps.protocol}' (supported: {supported})")
 
@@ -498,7 +539,8 @@ def _dispatch(args, b) -> int:
     elif v == "sniff":
         # sub-GHz tunes the capture by frequency: --freq resolves to the int-channel field.
         channel = _radio_channel(args) if getattr(args, "freq", None) else args.channel
-        n = b.sniff(args.write, count=args.count, seconds=args.seconds, channel=channel)
+        seconds, count = _capture_bounds(args)
+        n = b.sniff(args.write, count=count, seconds=seconds, channel=channel)
         print(f"captured {n} frame(s) -> {args.write}{_dropped_note(b)}")
     elif v == "inject":
         frame, channel = _build_inject(b, args)
@@ -514,7 +556,8 @@ def _dispatch(args, b) -> int:
             can.send(b, can_id, args.data)
             print("sent")
         elif args.can_cmd == "dump":
-            n = b.sniff(args.write, count=args.count, seconds=args.seconds)
+            seconds, count = _capture_bounds(args)
+            n = b.sniff(args.write, count=count, seconds=seconds)
             print(f"captured {n} frame(s) -> {args.write}{_dropped_note(b)}")
     elif v == "uart":
         from .protocols import uart
@@ -522,7 +565,7 @@ def _dispatch(args, b) -> int:
             n = uart.write(b, args.data.encode())
             print(f"wrote {n} byte(s)")
         elif args.uart_cmd == "read":
-            print(uart.read(b, args.timeout).decode(errors="replace"), end="")
+            _uart_read(b, args.timeout)
         elif args.uart_cmd == "console":
             return _uart_console(b, args)
         elif args.uart_cmd == "send":
@@ -600,6 +643,33 @@ def _uart_console(b, args) -> int:
     channel = b.stream_open("duplex")
     return console.run_console(channel, local_echo=args.local_echo, eol=args.eol,
                                replay_buffer=args.replay_buffer, attach_banner=banner)
+
+
+def _uart_read(b, timeout) -> None:
+    """`probe uart read`: stream the drained line to stdout INCREMENTALLY.
+
+    The read is already size-bounded at the backend (see StreamChannel.drain_into), but we also
+    avoid materializing-then-decoding one giant buffer: each drained chunk is decoded through an
+    incremental UTF-8 decoder (errors=replace) and written as it arrives. The incremental decoder is
+    load-bearing for correctness, not just memory: a multi-byte UTF-8 character split across two recv
+    chunks would be corrupted by a naive per-chunk `.decode()`, but the incremental decoder carries
+    the partial bytes across chunks and flushes any trailing incomplete sequence at the end -
+    byte-for-byte the same text the old whole-buffer `.decode(errors="replace")` produced."""
+    import codecs
+
+    from .protocols import uart
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+
+    def sink(chunk: bytes) -> None:
+        text = decoder.decode(chunk)
+        if text:
+            sys.stdout.write(text)
+
+    uart.read_into(b, sink, timeout)
+    tail = decoder.decode(b"", final=True)
+    if tail:
+        sys.stdout.write(tail)
+    sys.stdout.flush()
 
 
 def _uart_send(b, args) -> int:
