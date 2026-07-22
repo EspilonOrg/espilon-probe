@@ -212,6 +212,27 @@ def build_parser() -> argparse.ArgumentParser:
     spd.add_argument("-w", "--write", required=True, metavar="BIN")
     spd.add_argument("--pcap", metavar="PCAP", help="also write an optional transaction pcap")
 
+    ep = sub.add_parser("esp", help="ESP32 eFuse / secure-boot / flash-encryption (transaction "
+                                    "protocol; the boot banner is read with `probe uart read`)")
+    eps = ep.add_subparsers(dest="esp_cmd", required=True)
+    eps.add_parser("summary", help="show the eFuse / key-block / flash / boot state")
+    ebk = eps.add_parser("burn-key", help="burn a key block (write-once)")
+    ebk.add_argument("block", help="key block (key0..key5)")
+    ebk.add_argument("purpose", help="key purpose (e.g. xts_aes_128, secure_boot_digest0)")
+    ebk.add_argument("--data", required=True, help="key/digest bytes as hex (produced off-device)")
+    ebe = eps.add_parser("burn-efuse", help="burn a named eFuse field (monotonic, write-once)")
+    ebe.add_argument("field", help="eFuse field (e.g. SECURE_BOOT_EN, SPI_BOOT_CRYPT_CNT)")
+    ebe.add_argument("value", help="value (int or 0x..); a bit only flips 0->1")
+    erp = eps.add_parser("read-protect", help="set RD_DIS on a key block (redacts it)")
+    erp.add_argument("block", help="key block (key0..key5)")
+    ewf = eps.add_parser("write-flash", help="write an image to a flash region")
+    ewf.add_argument("--encrypt", action="store_true", help="mark for on-the-fly encryption")
+    ewf.add_argument("region", help="flash region (e.g. bootloader, app, nvs)")
+    ewf.add_argument("data", help="image bytes as hex (built/signed/encrypted off-device)")
+    erf = eps.add_parser("read-flash", help="read a flash region back")
+    erf.add_argument("region", help="flash region (e.g. bootloader, app, nvs)")
+    eps.add_parser("reboot", help="reboot: recompute the boot verdict and rewrite the banner")
+
     sg = sub.add_parser("subghz", help="sub-GHz radio hints (modulation/bands)")
     sgs = sg.add_subparsers(dest="subghz_cmd", required=True)
     sgd = sgs.add_parser("demod", help="modulation/bitrate HINT for a capture (not a decoder)")
@@ -432,6 +453,7 @@ _VERB_REQUIRES = {
     "uart": "uart",
     "jtag": "jtag",
     "spi": "spi",
+    "esp": "esp",
     "subghz": "subghz",
 }
 # `can` is sugar over the core verbs (send -> inject, dump -> sniff), so its sub-commands
@@ -447,6 +469,7 @@ _PROTOCOL_VERB = {
     "uart": "uart",
     "jtag": "jtag",
     "spi": "spi",
+    "esp": "esp",
     "subghz": "subghz",
 }
 
@@ -609,6 +632,8 @@ def _dispatch(args, b) -> int:
         _dispatch_jtag(args, b)
     elif v == "spi":
         _dispatch_spi(args, b)
+    elif v == "esp":
+        _dispatch_esp(args, b)
     elif v == "subghz":
         _dispatch_subghz(args, b)
     return 0
@@ -832,6 +857,99 @@ def _dispatch_spi(args, b) -> None:
         n = spi.dump(b, length, args.write, addr=addr, cs=args.cs, pcap_path=args.pcap)
         print(f"dumped {n} byte(s) -> {args.write}"
               + (f" (pcap -> {args.pcap})" if args.pcap else ""))
+
+
+def _dispatch_esp(args, b) -> None:
+    from .protocols import esp
+    cmd = args.esp_cmd
+    if cmd == "summary":
+        _print_esp_summary(esp.summary(b))
+    elif cmd == "burn-key":
+        _report_write(esp.burn_key(b, args.block, args.purpose, args.data), "burn-key")
+    elif cmd == "burn-efuse":
+        _report_write(esp.burn_efuse(b, args.field, args.value), "burn-efuse")
+    elif cmd == "read-protect":
+        _report_write(esp.read_protect(b, args.block), "read-protect")
+    elif cmd == "write-flash":
+        _report_write(esp.write_flash(b, args.region, args.data, encrypt=args.encrypt),
+                      "write-flash")
+    elif cmd == "read-flash":
+        res = esp.read_flash(b, args.region)
+        data = _hex_field(res.get("data", ""), "esp.read-flash data")
+        if res.get("opaque"):
+            # Ciphertext: never interpret it, print it as opaque hex so the operator sees it is
+            # not recoverable plaintext.
+            print(f"{res.get('region', args.region)}: [opaque {len(data)} bytes] {data.hex()}")
+        else:
+            print(f"{res.get('region', args.region)}: {_fmt_value(res.get('data', ''), 'esp.read-flash data')}")
+    elif cmd == "reboot":
+        res = esp.reboot(b)
+        banner = _hex_field(res.get("banner", ""), "esp.reboot banner") if _looks_hex(res.get("banner")) \
+            else str(res.get("banner", "")).encode()
+        sys.stdout.write(banner.decode("utf-8", "replace"))
+        if not banner.endswith(b"\n"):
+            sys.stdout.write("\n")
+        verdict = res.get("verdict")
+        if isinstance(verdict, dict) and verdict.get("summary"):
+            print(f"verdict: {verdict['summary']}")
+
+
+def _looks_hex(value) -> bool:
+    """True when a backend banner field is an even-length hex string (so it decodes to raw bytes).
+
+    The device may return the banner either as a UTF-8 string or hex-encoded; we render both
+    faithfully rather than guessing a shape and mangling the boot log."""
+    if not isinstance(value, str) or not value or (len(value) % 2) != 0:
+        return False
+    try:
+        bytes.fromhex(value)
+        return True
+    except ValueError:
+        return False
+
+
+def _print_esp_summary(res: dict) -> None:
+    """Render `esp summary`: eFuse fields, key blocks, flash/secure-boot booleans, boot verdict.
+
+    Every field is backend-supplied, so each is coerced defensively (a non-dict row is skipped, a
+    non-int value is shown verbatim) and a read-protected block renders `[read-protected]` - the
+    raw key/digest bytes of a redacted block are never printed."""
+    from .core.fields import as_int
+    if not isinstance(res, dict):
+        raise ProbeError(f"backend returned a non-object esp summary: {res!r}")
+    print("eFuses:")
+    for f in res.get("efuses", []) or []:
+        if not isinstance(f, dict):
+            continue
+        flags = []
+        if f.get("writeprot"):
+            flags.append("wp")
+        if f.get("readprot"):
+            flags.append("rp")
+        try:
+            val = f"0x{as_int(f.get('value', 0), 'efuse value'):x}"
+        except ProbeError:
+            val = str(f.get("value", ""))
+        tag = f"  ({','.join(flags)})" if flags else ""
+        print(f"  {f.get('name', '')} = {val}{tag}")
+    print("key blocks:")
+    for blk in res.get("blocks", []) or []:
+        if not isinstance(blk, dict):
+            continue
+        if blk.get("readprot") or not blk.get("readable", True):
+            shown = "[read-protected]"
+        elif "digest" in blk:
+            shown = str(blk.get("digest", ""))
+        else:
+            shown = "(empty)"
+        wp = "  (wp)" if blk.get("writeprot") else ""
+        print(f"  {blk.get('name', '')}  purpose={blk.get('purpose', '') or '-'}  {shown}{wp}")
+    print(f"flash_encryption={bool(res.get('flash_encryption'))}  "
+          f"secure_boot={bool(res.get('secure_boot'))}  "
+          f"crypt_cnt={res.get('crypt_cnt', 0)}")
+    boot = res.get("boot")
+    if isinstance(boot, dict):
+        print(f"last boot: {boot.get('verdict', '')}  {boot.get('summary', '')}".rstrip())
 
 
 def _dispatch_subghz(args, b) -> None:

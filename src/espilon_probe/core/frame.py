@@ -20,6 +20,7 @@ _U32_MAX = 0xFFFFFFFF
 __all__ = [
     "Frame", "PcapWriter", "read_pcap", "read_pcap_for_replay",
     "DLT_USER_PROBE_SUBGHZ", "DLT_USER_PROBE_SPI", "DLT_USER_PROBE_JTAG",
+    "DLT_USER_PROBE_ESP",
 ]
 
 # DLT_USER allocation registry (probe-wide). There is no standard pcap link type for JTAG,
@@ -31,6 +32,7 @@ __all__ = [
 DLT_USER_PROBE_SUBGHZ = 147   # USER0: 8-byte sub-GHz pseudo-header + demod payload
 DLT_USER_PROBE_SPI = 148      # USER1: SPI transaction record (optional pcap form)
 DLT_USER_PROBE_JTAG = 149     # USER2: JTAG transaction record (optional pcap form)
+DLT_USER_PROBE_ESP = 150      # USER3: ESP32 eFuse/secure-boot transaction record (optional)
 
 _MAGIC_LE = 0xA1B2C3D4
 # classic pcap magics -> byte order ("<" LE, ">" BE), microsecond and nanosecond variants

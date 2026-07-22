@@ -1,5 +1,45 @@
 # DEVLOG
 
+## feat(esp): ESP32 eFuse / secure-boot / flash-encryption protocol module + CLI
+
+Adds the client half of the `esp` medium (per the locked `design-esp-medium` contract). The
+client stays generalist and does NO crypto: real espsecure.py key-gen / sign / encrypt runs
+off-device on the player's host (Model B); the client only shapes the burn/flash/verify
+transactions and renders the results.
+
+### What
+
+1. **`protocols/esp.py` (new).** Named transactions over `Backend.op` as `OP{verb:"esp.<sub>"}`:
+   `summary / burn_key / burn_efuse / read_protect / write_flash / read_flash / reboot`, mirroring
+   the jtag/spi module shape. Client-side input validation fails loud BEFORE the wire: operator hex
+   is normalised/checked, key-block names are gated to `key0..key5` (a hardware fact), eFuse values
+   are int-coerced. No device/flag/verdict knowledge. The boot banner needs no code here - it rides
+   the existing `uart` verbs (`probe uart read`) on the composite `op_console` medium.
+2. **`cli.py`.** An `esp` subcommand group (summary / burn-key / burn-efuse / read-protect /
+   write-flash / read-flash / reboot), `_PROTOCOL_VERB["esp"]="esp"`, `_VERB_REQUIRES["esp"]="esp"`,
+   and dispatch. `summary` redacts a read-protected key block as `[read-protected]` (raw digest
+   bytes never printed) and flags a write-protected field `(wp)`; `read-flash` renders opaque
+   ciphertext as opaque bytes; `reboot` prints the returned banner + verdict.
+3. **`core/frame.py`.** Allocated `DLT_USER_PROBE_ESP = 150` (USER3) for the optional esp
+   transaction pcap.
+4. **Docs.** `docs/protocols/esp.md` (player verb reference + the espefuse/esptool<->probe mapping
+   table) and `docs/design/op-console.md` (the composite transaction+read-only-console shape; the
+   client is shape-agnostic on the data path).
+
+### Why
+
+`esp` lets a player drive a simulated ESP32 secure-boot hardening campaign with the same generalist
+`probe` CLI, and the same commands later drive a real serial (esptool ROM) backend - only the
+backend swaps. The download-mode transactions and the read-only boot banner faithfully mirror the
+two channels of a real ESP32 over one UART.
+
+### Scrutinise
+
+The client/device boundary: `esp read-flash` must never interpret opaque ciphertext, and `esp
+summary` must never render a read-protected block's raw bytes (both enforced in `_dispatch_esp` /
+`_print_esp_summary`). Key-block name validation is a deliberate generalist check (hardware fact),
+not challenge knowledge.
+
 ## fix(client): bound uart reads, validate capture windows, coerce caps lists
 
 Hardening pass closing three findings from an adversarial review of the probe client.
