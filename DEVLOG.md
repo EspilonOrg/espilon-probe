@@ -1,5 +1,41 @@
 # DEVLOG
 
+## docs(demo): clean per-protocol demo GIF set for public release + README gallery
+
+Brings the `demo/` per-protocol GIFs onto main for the public release, guaranteed free of any
+real platform flag, and wires them into the README as a growable gallery.
+
+### What
+
+1. **`demo/` (new on main).** Five terminal-recording GIFs (`demo-info`, `demo-scan-sniff`,
+   `demo-gatt`, `demo-bus`, `demo-solve`) with their `*.tape` VHS sources, the `render_agg.py`
+   agg fallback renderer, `shell_setup.sh`, the stdlib-only `demo_bridge.py` target simulator,
+   and `demo/README.md`. All five GIFs were re-rendered against the CURRENT main CLI, so the
+   output is accurate (the previously-recorded `demo-info` was stale: it predated the
+   `use`/`wizard`/`demo`/`esp` subcommands).
+2. **Flag scrub.** The old `demo-solve` recording displayed a real challenge flag. The
+   `solve` scenario in `demo_bridge.py` now returns a demo-only `FLAG{demo_target_unlocked}`
+   token, never a platform flag. Re-rendered and re-scanned: zero `ESPILON{...}` strings in any
+   final GIF (verified against the authoritative asciicast text each GIF renders from).
+3. **README.** New `## Demos` section (in the Contents TOC) with a per-protocol table that is
+   structured to grow one clip per protocol. The hero `assets/demo.gif` (the flag-free
+   `probe demo` built-in) is unchanged.
+4. **De-personalised** the tape scripts (dropped a hardcoded local home path; they now assume
+   the repo root cwd documented in `demo/README.md`).
+
+### Why
+
+The public base had no per-protocol demos, and the pre-existing recordings on the demo branch
+showed a real flag (a leak) and stale help text. This ships a clean, reproducible set.
+
+### Scrutinise
+
+The flag-leak guarantee is load-bearing: it rests on the asciicast being the sole text source
+agg can render, and on `grep -n ESPILON` over every `.cast` returning empty after the sanitised
+re-render. If a demo scenario is ever changed to surface secret bytes, re-run the cast scan
+before publishing. `demo/demo_bridge.py` is a demo target simulator under `demo/`, not client
+core, and imports nothing from `src/espilon_probe/`.
+
 ## feat(esp): ESP32 eFuse / secure-boot / flash-encryption protocol module + CLI
 
 Adds the client half of the `esp` medium (per the locked `design-esp-medium` contract). The

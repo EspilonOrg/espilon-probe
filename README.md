@@ -20,6 +20,7 @@ standard library.
 
 - [Try it in 30 seconds](#try-it-in-30-seconds)
 - [Examples](#examples)
+- [Demos](#demos)
 - [Protocols](#protocols)
 - [Install](#install)
 - [The backend model](#the-backend-model)
@@ -83,6 +84,23 @@ probe replay -r cap.pcap
 `sniff` is always bounded client-side: pass `-c`/`-t`, or a default 30s ceiling applies (no
 capture that trusts the target to end the stream). `replay` refuses a pcap whose link type
 does not match the active protocol.
+
+## Demos
+
+Short terminal recordings of the shipped client driving self-contained demo targets. Every
+frame is real `probe` output; no hardware and no real flags. The set grows one clip per
+protocol over time.
+
+| Demo | Target | Shows |
+|---|---|---|
+| ![probe tour](demo/demo-info.gif) | (the tool) | `probe --help` + `probe info`: the full protocol and verb surface |
+| ![scan + sniff](demo/demo-scan-sniff.gif) | Zigbee mesh | `scan` a mesh, `sniff -c 8` to a real pcap, confirm the capture |
+| ![BLE GATT](demo/demo-gatt.gif) | BLE smart-lock | `gatt enum` / `read` / `write`: the write flips the lock state |
+| ![SPI flash](demo/demo-bus.gif) | SPI NOR flash | `spi id` (JEDEC), `spi read`, `spi dump` to a raw image |
+| ![BLE unlock](demo/demo-solve.gif) | BLE vault | unlock over the protocol; the secret handle returns a demo token |
+
+Every clip is reproducible from its `*.tape` script (or the `render_agg.py` fallback) under
+[`demo/`](demo/); see [`demo/README.md`](demo/README.md).
 
 ## Protocols
 
