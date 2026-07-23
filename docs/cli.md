@@ -66,8 +66,10 @@ probe can send <id> <hex>
 probe can dump -w cap.pcap [-c N] [-t S]
 
 # UART
-probe uart read
+probe uart read [-t S]
 probe uart write <text>
+probe uart send  <text> [-t S] [--eol cr|lf|crlf] [--expect REGEX] [--no-read]
+probe uart console [--local-echo] [--eol cr|lf|crlf] [--replay-buffer]
 
 # JTAG
 probe jtag scan-chain
@@ -85,6 +87,16 @@ probe spi write --addr A --hex ... [--cs N]
 probe spi reg   <name> [--read | --write HEX] [--cs N]
 probe spi xfer  --hex <mosi> [--cs N]
 probe spi dump  --len L [--addr A] -w out.bin [--pcap session.pcap]
+
+# ESP32 eFuse / secure-boot / flash-encryption (keys/images built off-device, Model B)
+probe esp summary                                   # eFuses, key blocks, flash/secure-boot state
+probe esp burn-key <key0..key5> <purpose> --data <hex>
+probe esp burn-efuse <FIELD> <value>                # monotonic, write-once (a bit only 0 -> 1)
+probe esp read-protect <key0..key5>                 # set RD_DIS (redacts the block)
+probe esp write-flash [--encrypt] <region> <hex>    # region = bootloader | app | nvs | ...
+probe esp read-flash <region>                       # plaintext, or [opaque ...] when encrypted
+probe esp reboot                                    # recompute the boot verdict + rewrite banner
+probe uart read                                     # read the boot banner (the reveal stream)
 
 # sub-GHz (radio params extend the core verbs)
 probe subghz bands

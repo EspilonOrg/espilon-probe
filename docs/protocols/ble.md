@@ -1,11 +1,13 @@
 # Protocol: BLE
 
-**Status:** shape `packet` + `op`. The `virtual` backend works today; the real `hci` (Linux
-BlueZ) backend is not built yet.
+**Status:** shape `packet` + `op`. Both backends work today: the `virtual` backend and the real
+`hci` (Linux BlueZ) backend, which drives real BLE GATT over BlueZ and needs the optional `[hci]`
+extra (`pip install espilon-probe[hci]`, pulling `bleak`; the dependency loads lazily in the
+bridge, never in the client core).
 
 Read `../protocol-conventions.md` first. This doc specifies `protocols/ble.py` and what a virtual
-backend must simulate; the same `probe gatt`/`sniff`/`inject`/`replay` commands are designed to
-drive the future `hci` backend unchanged.
+backend must simulate; the same `probe gatt`/`sniff`/`inject`/`replay` commands drive the `hci`
+backend unchanged.
 
 ## 1. What it models
 

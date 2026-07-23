@@ -17,8 +17,8 @@ The docs are split in two: a lean **user-facing** set here, and internal **desig
   shape taxonomy, the sniff bound, the pcap DLT registry).
 - [`protocols/`](protocols/) - one doc per protocol, each a self-contained codec spec with a
   status line: [`ble`](protocols/ble.md), [`can`](protocols/can.md), [`uart`](protocols/uart.md),
-  [`jtag`](protocols/jtag.md), [`spi`](protocols/spi.md), [`subghz`](protocols/subghz.md),
-  [`zigbee`](protocols/zigbee.md).
+  [`jtag`](protocols/jtag.md), [`spi`](protocols/spi.md), [`esp`](protocols/esp.md),
+  [`subghz`](protocols/subghz.md), [`zigbee`](protocols/zigbee.md).
 
 For a one-paragraph orientation on the layering, see [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
 

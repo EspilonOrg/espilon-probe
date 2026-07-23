@@ -1,9 +1,10 @@
 # espilon-probe
 
 **One CLI for the physical layer.** `probe` is a single, consistent interface to everything
-below IP: radio (BLE, Zigbee, sub-GHz) and wired hardware buses (CAN, UART, JTAG, SPI). The
-*same commands* drive a virtual target and real hardware; only the backend changes. The client
-core is pure Python standard library.
+below IP: radio (BLE, Zigbee, sub-GHz), wired hardware buses (CAN, UART, JTAG, SPI), and the
+ESP32 secure-boot / eFuse / flash-encryption surface (`esp`). The *same commands* drive a
+virtual target and real hardware; only the backend changes. The client core is pure Python
+standard library.
 
 [![CI](https://img.shields.io/github/actions/workflow/status/EspilonOrg/espilon-probe/ci.yml?branch=main&label=CI)](https://github.com/EspilonOrg/espilon-probe/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
@@ -67,6 +68,12 @@ probe spi id
 probe spi read --addr 0 --len 256
 probe spi dump --len 0x100000 -w flash.bin
 
+# ESP32 secure boot / eFuse / flash encryption (keys/images built off-device)
+probe esp summary
+probe esp burn-efuse SECURE_BOOT_EN 1
+probe esp reboot
+probe uart read                          # the boot banner reports the verdict
+
 # sub-GHz (radio params extend the core verbs)
 probe subghz bands
 probe sniff  -w cap.pcap --freq 433.92M --mod ook -t 30
@@ -87,6 +94,7 @@ does not match the active protocol.
 | `zigbee` | 802.15.4 / Zigbee: driven through the core verbs (`scan`/`sniff`/`inject`/`replay`) against a Zigbee target; there is no separate `zigbee` subcommand |
 | `jtag` | JTAG TAP: scan the chain, halt/resume, read/write memory and registers, dump firmware |
 | `spi` | SPI master: JEDEC ID, read/write, register access, raw transfer, dump NOR flash |
+| `esp` | ESP32 hardening: burn eFuses / key blocks, read-protect keys, write/read flash, reboot and read the secure-boot / flash-encryption verdict from the boot banner (`probe uart read`) |
 | `subghz` | sub-GHz radio: scan bands, sniff/inject/replay OOK/ASK/2-FSK packets, demod hint |
 
 Each protocol declares a *shape* (packet / stream / transaction) and only advertises the
