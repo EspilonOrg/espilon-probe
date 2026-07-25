@@ -52,8 +52,10 @@ conformance-gatt-real:
 
 conformance: conformance-uart conformance-can conformance-gatt
 
-# Build the wheel/sdist and validate the metadata.
+# Build the wheel/sdist and validate the metadata. Clean first so a stale wheel from a
+# previous build can never linger in dist/ and be `twine upload`ed by accident.
 build:
+	rm -rf dist build
 	$(PYTHON) -m build
 
 check: build

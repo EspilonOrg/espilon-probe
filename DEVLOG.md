@@ -1,5 +1,34 @@
 # DEVLOG
 
+## fix(release): clean the build dir and bound single-shot spi/jtag reads
+
+Two small pre-public-release fixes surfaced by the adversarial review.
+
+### What
+
+1. **`make build` cleans first.** The `build` target now runs `rm -rf dist build` before
+   `python -m build`, so a stale wheel left in `dist/` from a previous build can never be
+   picked up and `twine upload`ed by accident. (The stale `dist/`, `build/`, `.demo-venv/`,
+   `.demo-work/` trees were also removed from disk; they are gitignored, never tracked.)
+2. **Non-positive single-shot reads are refused.** `spi read --len` and `jtag read --words`
+   passed the operator's count straight to the backend op with no lower bound, so
+   `spi read --len -5` / `jtag read --words -1` exited 0 silently. `spi.read` and `jtag.read`
+   now raise a clean `ProbeError` on a non-positive count (`must be positive`), the same bound
+   the `dump` sugar already enforces. The `dump` loops always pass a positive chunk, so they
+   are unaffected.
+
+### Why
+
+Both are release footguns: the first can push a stale artifact to an index, the second lets a
+malformed invocation look like a successful no-op instead of failing loud. Conservative,
+fail-loud behavior for both.
+
+### Tests
+
+Added `test_spi_read_non_positive_length_refused` and `test_jtag_read_non_positive_words_refused`
+(mirror the existing dump-ceiling tests: assert the backend `op` is never called and the error
+carries `must be positive`). Full suite stays green.
+
 ## docs(demo): clean per-protocol demo GIF set for public release + README gallery
 
 Brings the `demo/` per-protocol GIFs onto main for the public release, guaranteed free of any

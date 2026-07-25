@@ -159,6 +159,21 @@ def test_jtag_dump_length_ceiling_refused():
     assert "exceeds the client ceiling" in str(ei.value)
 
 
+def test_jtag_read_non_positive_words_refused():
+    # A single-shot `jtag read --words` count must be positive; a zero/negative count is refused
+    # before it can reach the backend (matches the bound `jtag dump` already enforces).
+    from espilon_probe.protocols import jtag
+
+    class _B:
+        def op(self, *a, **k):  # never reached: the count is checked first
+            raise AssertionError("backend must not be called for a non-positive read")
+
+    for bad in (0, -1):
+        with pytest.raises(ProbeError) as ei:
+            jtag.read(_B(), 0x20000000, words=bad)
+        assert "must be positive" in str(ei.value)
+
+
 def test_jtag_dump_non_word_length_refused():
     from espilon_probe.protocols import jtag
 

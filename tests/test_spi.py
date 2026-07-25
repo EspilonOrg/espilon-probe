@@ -207,6 +207,21 @@ def test_spi_dump_length_ceiling_refused():
     assert "exceeds the client ceiling" in str(ei.value)
 
 
+def test_spi_read_non_positive_length_refused():
+    # A single-shot `spi read --len` must be positive; a zero/negative length is refused before
+    # it can reach the backend (matches the bound `spi dump` already enforces).
+    from espilon_probe.protocols import spi
+
+    class _B:
+        def op(self, *a, **k):          # never reached: the count is checked first
+            raise AssertionError("backend must not be called for a non-positive read")
+
+    for bad in (0, -5):
+        with pytest.raises(ProbeError) as ei:
+            spi.read(_B(), 0, bad)
+        assert "must be positive" in str(ei.value)
+
+
 # --- malformed-backend-response robustness (Sprint 2 audit repros) ---
 
 class _ScriptB:

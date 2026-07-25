@@ -74,6 +74,10 @@ def device_id(backend: Backend, cs: int = 0) -> dict:
 
 
 def read(backend: Backend, addr: int, length: int, cs: int = 0) -> dict:
+    # A single-shot read length must be positive; a non-positive `--len` is refused here so it
+    # never reaches the backend (the same bound `dump` enforces, applied to the sugar's core op).
+    if length <= 0:
+        raise ProbeError(f"spi read: length {length} must be positive")
     return _result(backend, "spi.read", addr=addr, len=length, cs=cs)
 
 

@@ -112,6 +112,10 @@ def resume(backend: Backend, tap: int = 0, addr: int | None = None) -> dict:
 
 
 def read(backend: Backend, addr: int, words: int = 1) -> dict:
+    # A single-shot read count must be positive; a non-positive `--words` is refused here so it
+    # never reaches the backend (the same bound `dump` enforces, applied to the sugar's core op).
+    if words <= 0:
+        raise ProbeError(f"jtag read: word count {words} must be positive")
     return _result(backend, "jtag.read", addr=addr, words=words)
 
 
