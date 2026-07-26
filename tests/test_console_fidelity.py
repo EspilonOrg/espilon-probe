@@ -109,3 +109,10 @@ def test_console_same_tape_virtual_and_pty_serial_device_visible_identical():
         f"  serial ={bytes(r_console.received)!r}")
     # And the tape actually reached the device (not a both-empty false pass).
     assert b"echo hi-console\r" in bytes(v_console.received)
+    # The detach key (Ctrl-], 0x1d) is a client-consumed control keystroke, NOT typed input: the
+    # console forwards everything BEFORE it and then detaches, so it must never reach the device.
+    # Asserting its absence keeps this a LOUD guard - if a co-running harness ever leaked a stray
+    # detach byte into this session's fd again (the recycled-fd bug this test used to flake on), or
+    # the client regressed and forwarded it, this fails rather than being silently absorbed.
+    assert console.ESCAPE not in bytes(v_console.received)
+    assert console.ESCAPE not in bytes(r_console.received)

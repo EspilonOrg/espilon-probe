@@ -1,5 +1,42 @@
 # DEVLOG
 
+## test(console): fix the ACTUAL perpetrator - test_console.py's leaked watchdog
+
+Follow-up to the console-fidelity harness fix below (`fix(test): join console-fidelity harness
+threads...`). That change hardened `test_console_fidelity.py`'s OWN threads, which is necessary but
+NOT sufficient: instrumenting `os.write`/`socket.send` across a full-suite run showed the stray
+`0x1d` bytes that corrupt the fidelity recording originate in `tests/test_console.py::_drive` (its
+`driver`/`watchdog`, line 113/121), not in the fidelity test. `_drive`'s watchdog was "Daemon +
+never joined" and fired an unconditional `os.write(master, ESCAPE)` 8s after its session, by which
+point `master` was closed and its fd NUMBER had been recycled by the OS to a LATER test - the
+fidelity test's channel socket or device pty - injecting the detach byte into an unrelated
+device-visible stream. Because `test_console.py` sorts before `test_console_fidelity.py`, its
+lingering watchdogs fire WHILE the fidelity test runs. A fidelity-only fix therefore still fails the
+full 3.10 suite (confirmed empirically).
+
+### What
+
+Apply the same fd-lifecycle discipline to `tests/test_console.py::_drive`: the watchdog is cancelable
+via a `done` Event (returns without writing after a normal end), every keystroke write is gated on
+`done`, and BOTH threads are JOINED before `master`/`slave` are closed. The client
+(`core/console.py`) is unchanged and was never at fault - it forwards ZERO ESCAPE bytes (it splits
+each stdin read at the first `0x1d` and sends only the bytes before it), proven by instrumenting
+`_forward`. `test_console_fidelity.py` additionally gains a LOUD guard that the detach key is never
+device-visible, so any future re-leak or client regression fails rather than being masked.
+
+### Why
+
+The root cause is a shared harness anti-pattern (a pty fd closed while a writer thread can still use
+it), and the fidelity test was the VICTIM of `test_console.py`'s leak, not only a leaker itself.
+Fixing only the victim leaves the flake open; the perpetrator must be fixed too. Masking the escape
+in the assertion was rejected: it would hide a genuine forward-the-detach-key regression.
+
+### Tests
+
+Full suite green on Python 3.10 (3x) and 3.11 (2x): 377 passed, 4 skipped each. Before this commit a
+fidelity-harness-only fix still failed 3/3 full-suite runs on 3.10; after, 0 failures. Hammering
+`test_console.py` + `test_console_fidelity.py` together 20x on 3.10: 0 failures.
+
 ## fix(test): stop the console-fidelity harness leaking a stray ESCAPE across sessions
 
 The `test (3.10)` CI job went red on the console-fidelity test while `3.11`/`3.12` stayed green.

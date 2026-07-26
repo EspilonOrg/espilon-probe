@@ -101,12 +101,18 @@ def _drive(*, script, echo=True, banner=b"", local_echo=False, eol="cr", replay_
     backend.open()
     channel = backend.stream_open("duplex")
 
+    done = threading.Event()
+
     def driver():
         time.sleep(lead)                         # let attach-clean finish + the loop go live
         for chunk in script:
+            if done.is_set():
+                return
             os.write(master, chunk)
             time.sleep(0.08)
         time.sleep(0.2)
+        if done.is_set():
+            return
         if signal_after is not None:
             os.kill(os.getpid(), signal_after)
         elif escape:
@@ -114,9 +120,13 @@ def _drive(*, script, echo=True, banner=b"", local_echo=False, eol="cr", replay_
 
     def watchdog():
         # Independent safety net so a logic bug can never HANG CI: force a detach if the session is
-        # still alive well past its expected end. Daemon + never joined, so it adds no latency to a
-        # normal run; a write to an already-closed master is a harmless OSError.
-        time.sleep(8.0)
+        # still alive well past its expected end. CANCELABLE via `done`: after a normal end it returns
+        # WITHOUT writing. This is load-bearing - an unconditional late write to `master` is NOT a
+        # harmless OSError once the fd is closed: its NUMBER may have been recycled (to another test's
+        # socket or device pty), so the write would inject the detach byte into an UNRELATED stream.
+        # Gating on `done` + the join below guarantees no write to `master` after teardown.
+        if done.wait(8.0):
+            return
         try:
             os.write(master, bytes((console.ESCAPE,)))
         except OSError:
@@ -124,13 +134,15 @@ def _drive(*, script, echo=True, banner=b"", local_echo=False, eol="cr", replay_
 
     t = threading.Thread(target=driver, daemon=True)
     t.start()
-    threading.Thread(target=watchdog, daemon=True).start()
+    wd = threading.Thread(target=watchdog, daemon=True)
+    wd.start()
     code = None
     try:
         code = console.run_console(channel, stdin_fd=slave, stdout_fd=w_out,
                                    local_echo=local_echo, eol=eol, replay_buffer=replay_buffer,
                                    attach_banner="[probe] attached")
     finally:
+        done.set()                               # stop the driver/watchdog from any further write
         saved_after = termios.tcgetattr(slave)
         os.close(w_out)
         out = bytearray()
@@ -140,7 +152,11 @@ def _drive(*, script, echo=True, banner=b"", local_echo=False, eol="cr", replay_
                 break
             out += chunk
         os.close(r_out)
-        t.join(timeout=1.0)
+        # JOIN both writer threads BEFORE closing master/slave. Both are bounded (the driver's
+        # longest sleep is 0.2s, the watchdog returns the instant `done` is set), so a closed master
+        # fd is never handed back to a live writer that could scribble into a recycled fd.
+        t.join(timeout=2.0)
+        wd.join(timeout=2.0)
         backend.close()
         srv.shutdown()
         srv.server_close()
