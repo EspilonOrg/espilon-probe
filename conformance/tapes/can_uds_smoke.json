@@ -1,0 +1,19 @@
+{
+  "name": "can-uds-smoke",
+  "protocol": "can",
+  "description": "CAN FRAMED-shape pilot over the SHIPPED clients: virtual (--backend virtual) vs real (--backend socketcan --target vcan0). Proves virtual == real frame-for-frame on the captured pcap frames, AND that each UDS response frame is actually present (expect). Each UDS exchange is a `can send 7E0 <sf>` followed by a `can dump -c 1`; the persistent bridge FIFO makes send-then-dump deterministic (the 7E8 response injected between the two connections survives). SINGLE-FRAME ISO-TP ONLY: the request payload is the already-SF-wrapped 8-byte CAN data ([PCI][pdu] 0x00-padded), since `can send` is a generalist raw inject that carries no ISO-TP knowledge. The `expect` values are the response UDS PDUs (hex), decoded from the captured frames by the comparator. Seed is course-FIXED (11223344), so it is in diff scope on both sides. Covers: open session, request seed, privileged read denied pre-unlock (NRC 33), invalid key (NRC 35, state does not advance), unlock, privileged read served.",
+  "steps": [
+    {"argv": ["can", "send", "0x7E0", "0210030000000000"]},
+    {"argv": ["can", "dump", "-w", "cap", "-c", "1"], "expect": ["5003003201f4"]},
+    {"argv": ["can", "send", "0x7E0", "0227010000000000"]},
+    {"argv": ["can", "dump", "-w", "cap", "-c", "1"], "expect": ["670111223344"]},
+    {"argv": ["can", "send", "0x7E0", "0322f19000000000"]},
+    {"argv": ["can", "dump", "-w", "cap", "-c", "1"], "expect": ["7f2233"]},
+    {"argv": ["can", "send", "0x7E0", "0627020000000000"]},
+    {"argv": ["can", "dump", "-w", "cap", "-c", "1"], "expect": ["7f2735"]},
+    {"argv": ["can", "send", "0x7E0", "062702b48796e100"]},
+    {"argv": ["can", "dump", "-w", "cap", "-c", "1"], "expect": ["6702"]},
+    {"argv": ["can", "send", "0x7E0", "0322f19000000000"]},
+    {"argv": ["can", "dump", "-w", "cap", "-c", "1"], "expect": ["62f190deadbeef"]}
+  ]
+}

@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.demo-venv/
+.demo-work/
+.pytest_cache/
+*.pcap
+*.cap
+.DS_Store
+
+# local agent/editor config - never tracked
+.claude/
+.idea/
+.vscode/

@@ -1,0 +1,18 @@
+# Classic ESP32 (Xtensa).
+CONFIG_IDF_TARGET="esp32"
+
+# CRITICAL - keep UART0 carrying ONLY the console protocol bytes.
+# A single stray log line breaks byte-equality with the virtual model.
+
+# Second-stage bootloader: no log output.
+CONFIG_BOOTLOADER_LOG_LEVEL_NONE=y
+
+# Application: default log verbosity none (compiles out ESP_LOGx above none).
+CONFIG_LOG_DEFAULT_LEVEL_NONE=y
+
+# Do not attach the IDF console/stdio to any UART. We own UART0 via the driver.
+# This silences the 2nd-stage bootloader banner and any accidental printf/log on UART0.
+CONFIG_ESP_CONSOLE_UART_NONE=y
+
+# NOTE: the ROM (first-stage) boot log on the classic ESP32 is NOT controllable via
+# Kconfig. It is silenced in hardware by strapping GPIO15 (MTDO) LOW at reset. See README.
