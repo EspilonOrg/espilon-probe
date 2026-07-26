@@ -91,13 +91,35 @@ Short terminal recordings of the shipped client driving self-contained demo targ
 frame is real `probe` output; no hardware and no real flags. The set grows one clip per
 protocol over time.
 
-| Demo | Target | Shows |
-|---|---|---|
-| ![probe tour](demo/demo-info.gif) | (the tool) | `probe --help` + `probe info`: the full protocol and verb surface |
-| ![scan + sniff](demo/demo-scan-sniff.gif) | Zigbee mesh | `scan` a mesh, `sniff -c 8` to a real pcap, confirm the capture |
-| ![BLE GATT](demo/demo-gatt.gif) | BLE smart-lock | `gatt enum` / `read` / `write`: the write flips the lock state |
-| ![SPI flash](demo/demo-bus.gif) | SPI NOR flash | `spi id` (JEDEC), `spi read`, `spi dump` to a raw image |
-| ![BLE unlock](demo/demo-solve.gif) | BLE vault | unlock over the protocol; the secret handle returns a demo token |
+### The tool: `probe --help` + `probe info`
+
+The full protocol and verb surface, at a glance.
+
+<p align="center"><img src="demo/demo-info.gif" alt="probe --help and probe info: the full protocol and verb surface" width="720"></p>
+
+### Zigbee mesh: `scan` + `sniff`
+
+`scan` a mesh, then `sniff -c 8` to a real pcap and confirm the capture.
+
+<p align="center"><img src="demo/demo-scan-sniff.gif" alt="probe scan and sniff against a Zigbee mesh" width="720"></p>
+
+### BLE smart-lock: `gatt enum` / `read` / `write`
+
+Enumerate the GATT table, read the lock state, then `write` to flip it.
+
+<p align="center"><img src="demo/demo-gatt.gif" alt="probe gatt enum, read and write on a BLE smart-lock" width="720"></p>
+
+### SPI NOR flash: `spi id` / `read` / `dump`
+
+`spi id` (JEDEC), `spi read`, then `spi dump` to a raw image.
+
+<p align="center"><img src="demo/demo-bus.gif" alt="probe spi id, read and dump on a SPI NOR flash" width="720"></p>
+
+### BLE vault: unlock over the protocol
+
+Drive the unlock end to end; the secret handle returns a demo token (synthetic, never a real flag).
+
+<p align="center"><img src="demo/demo-solve.gif" alt="probe solving a BLE vault over the protocol" width="720"></p>
 
 Every clip is reproducible from its `*.tape` script (or the `render_agg.py` fallback) under
 [`demo/`](demo/); see [`demo/README.md`](demo/README.md).
