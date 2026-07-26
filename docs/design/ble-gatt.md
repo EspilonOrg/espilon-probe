@@ -109,7 +109,7 @@ Rationale, weighed honestly against the stdlib-core rule:
   extras.** `00` decision 8 and `02` section 4 say it in as many words: the client core stays
   stdlib-only; third-party deps live in bridge media, lazily imported, each a written justification
   scoped to its one medium. socketcan/serial *happened* to be stdlib; `hci`/`killerbee`/`sdr` were
-  **always** "planned, behind extras" - `pyproject.toml` already reserves `hci = []`. bleak in
+  **always** "planned, behind extras" - `pyproject.toml` already reserves `hci = ["bleak>=0.21"]`. bleak in
   `bridges/media/hci.py` violates nothing: the client core, the virtual bridge, and the whole
   virtual leg never import it.
 

@@ -10,12 +10,18 @@ layered for that DLT dissect cleanly; the pcap container itself is protocol-agno
 from __future__ import annotations
 
 import math
+import os
 import struct
 
 from .errors import ProbeError
-from .wire import Frame   # re-export the single Frame type
+from .wire import Frame, MAX_MSG   # re-export the single Frame type; MAX_MSG is the caplen ceiling
 
 _U32_MAX = 0xFFFFFFFF
+
+# A per-record `caplen` larger than the wire ceiling cannot be a legitimate frame (nothing bigger
+# ever crosses the wire), so a record claiming more is treated as a corrupt/truncated pcap and the
+# read stops rather than allocating. See `read_pcap`.
+_CAPLEN_CEIL = MAX_MSG
 
 __all__ = [
     "Frame", "PcapWriter", "read_pcap", "read_pcap_for_replay",
@@ -100,15 +106,26 @@ class PcapWriter:
 
 
 def read_pcap(path: str) -> tuple[int, list[bytes]]:
-    """Return (linktype, [raw frame bytes]). Accepts little- or big-endian classic pcap."""
+    """Return (linktype, [raw frame bytes]). Accepts little- or big-endian classic pcap.
+
+    The per-record `caplen` is an attacker-declared 32-bit field. It is CLAMPED against a sane
+    ceiling BEFORE the read: a record that declares more than the wire ceiling (`MAX_MSG`, no
+    legitimate frame is larger) or more than the bytes physically left in the file is a truncated
+    or corrupt pcap, so we stop cleanly - the same break as a short read - rather than let
+    `f.read(caplen)` try to allocate gigabytes on a 44-byte file that claims `caplen=0xffffffff`.
+    Malformed input therefore never allocates unbounded memory; a bad magic still raises a clean
+    `ProbeError` that `main()` renders, never an uncaught `MemoryError` or traceback."""
     with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        file_size = f.tell()
+        f.seek(0)
         hdr = f.read(_GLOBAL.size)
         if len(hdr) < _GLOBAL.size:
             return 0, []
         (magic,) = struct.unpack("<I", hdr[:4])
         endian = _MAGICS.get(magic)
         if endian is None:
-            raise ValueError(f"not a pcap file (bad magic 0x{magic:08x})")
+            raise ProbeError(f"not a pcap file (bad magic 0x{magic:08x})")
         g = struct.Struct(endian + "IHHiIII")
         rec = struct.Struct(endian + "IIII")
         (_, _, _, _, _, _, linktype) = g.unpack(hdr)
@@ -118,6 +135,11 @@ def read_pcap(path: str) -> tuple[int, list[bytes]]:
             if len(ph) < rec.size:
                 break
             _sec, _usec, caplen, _orig = rec.unpack(ph)
+            remaining = file_size - f.tell()
+            if caplen > _CAPLEN_CEIL or caplen > remaining:
+                # Over-ceiling or larger than the rest of the file: truncated/corrupt record.
+                # Stop cleanly instead of attempting a huge allocation.
+                break
             data = f.read(caplen)
             if len(data) < caplen:
                 break

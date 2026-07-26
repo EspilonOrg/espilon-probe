@@ -60,7 +60,7 @@ def test_gatt_resolve_by_uuid():
 def test_read_pcap_rejects_non_pcap(tmp_path):
     p = tmp_path / "junk.bin"
     p.write_bytes(b"this is definitely not a pcap file............")
-    with pytest.raises(ValueError):
+    with pytest.raises(ProbeError):
         pframe.read_pcap(str(p))
 
 

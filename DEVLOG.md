@@ -77,10 +77,10 @@ real platform flag, and wires them into the README as a growable gallery.
    and `demo/README.md`. All five GIFs were re-rendered against the CURRENT main CLI, so the
    output is accurate (the previously-recorded `demo-info` was stale: it predated the
    `use`/`wizard`/`demo`/`esp` subcommands).
-2. **Flag scrub.** The old `demo-solve` recording displayed a real challenge flag. The
-   `solve` scenario in `demo_bridge.py` now returns a demo-only `FLAG{demo_target_unlocked}`
-   token, never a platform flag. Re-rendered and re-scanned: zero `ESPILON{...}` strings in any
-   final GIF (verified against the authoritative asciicast text each GIF renders from).
+2. **Synthetic demo flag.** The `solve` scenario in `demo_bridge.py` returns a synthetic
+   placeholder flag token, never a real platform flag, so the demo asset is safe to publish.
+   Re-rendered and re-scanned: the final GIFs carry only the placeholder token (verified against
+   the authoritative asciicast text each GIF renders from).
 3. **README.** New `## Demos` section (in the Contents TOC) with a per-protocol table that is
    structured to grow one clip per protocol. The hero `assets/demo.gif` (the flag-free
    `probe demo` built-in) is unchanged.

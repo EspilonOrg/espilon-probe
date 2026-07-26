@@ -285,6 +285,32 @@ def _parse_hex(text: str, what: str = "hex") -> bytes:
         raise ProbeError(f"invalid {what} {text!r} (expected hex bytes, e.g. 0201 or deadbeef)")
 
 
+def _hex_value(text: str, what: str = "hex") -> str:
+    """Normalize an operator hex value: accept an optional `0x`/`0X` prefix, validate, return the
+    bare hex string.
+
+    Mirrors how `_parse_int` accepts `0x..`, so the `spi` hex-payload args are consistent with
+    `jtag write --word` (a beginner who types `0x00` is no longer rejected). Bare hex keeps
+    working unchanged: a hex string can never itself start with `0x` (`x` is not a hex digit), so
+    stripping the prefix is unambiguous and never eats a valid payload. Genuinely-invalid hex is
+    refused exactly as `_parse_hex` would (`ProbeError`, never a raw `fromhex` traceback).
+
+    An EMPTY payload is refused: a bare `""`, a lone `0x`/`0X` prefix, or a value that decodes to
+    zero bytes carries nothing to write, so `spi write --hex 0x` used to silently write nothing. The
+    empty check is made on the DECODED result, not the raw text: `bytes.fromhex` silently ignores
+    ASCII whitespace, so `0x ` / `  ` / `0x\n` / `0x\t` all parse to `b""` and slipped past a bare
+    `bare == ""` string check. Parsing first and refusing an empty result closes that hole. A write
+    with no bytes is an operator mistake, not a meaningful empty payload, so it fails loud like any
+    other bad hex."""
+    bare = str(text)
+    if bare[:2] in ("0x", "0X"):
+        bare = bare[2:]
+    parsed = _parse_hex(bare, what)  # validate; raises a clean ProbeError on bad hex
+    if not parsed:
+        raise ProbeError(f"invalid {what} {text!r} (expected hex bytes, e.g. 0201 or deadbeef)")
+    return bare
+
+
 def _require_positive_seconds(val: float, label: str) -> float:
     """A `-t/--seconds` window must be a POSITIVE, FINITE number of seconds, else a clean ProbeError.
 
@@ -377,6 +403,113 @@ def _scan_rows(items) -> list[dict]:
     if not isinstance(items, list):
         raise ProbeError(f"backend returned non-list scan items {items!r}")
     return [it for it in items if isinstance(it, dict)]
+
+
+# `probe scan` leads with these canonical columns (when a row carries them) so the packet
+# protocols read name/addr/rssi first; every other key follows in first-appearance order.
+_SCAN_LEAD_COLS = ("name", "addr", "rssi")
+
+# Hard caps on the HUMAN scan table. The rows/keys are backend-supplied and a hostile or buggy
+# bridge can return an arbitrary count of rows, each with distinct keys, turning the union-of-keys
+# grid into an O(rows x cols) dense matrix (rows distinct keys => cols == rows => an N^2 blow-up
+# that OOMs/hangs the terminal). These bound the rendered table to a fixed size; the structured
+# `op()` result the scripts read is never touched, only this pretty-print is truncated.
+_SCAN_MAX_ROWS = 200            # render at most this many rows, then a "... N more rows" line
+_SCAN_MAX_COLS = 32             # render at most this many columns, extra keys dropped with a note
+_SCAN_MAX_CELL = 200            # ellipsize any single cell wider than this many display chars
+
+
+def _scan_sanitize(text: str) -> str:
+    """Escape control bytes in a scan-table cell so attacker-controlled fields cannot forge rows
+    or inject terminal escapes.
+
+    Scan fields (BLE advertiser name, manufacturer data) are attacker-controlled and rendered
+    straight to a terminal. A raw `\\n` would forge an extra table row; a raw CSI (`\\x1b[2K\\r`)
+    would drive the operator's terminal. Every C0 control (0x00-0x1f), DEL (0x7f), and C1 control
+    (0x80-0x9f) - which includes ESC, the byte that starts every CSI/ANSI sequence - is replaced
+    by a visible `\\xHH` token, so no raw control byte ever reaches the terminal. This is
+    conservative by construction (an allowlist of printable bytes), never a best-effort filter."""
+    out: list[str] = []
+    for ch in text:
+        o = ord(ch)
+        if o < 0x20 or o == 0x7f or 0x80 <= o <= 0x9f:
+            out.append("\\x%02x" % o)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _scan_cell(value) -> str:
+    """Render one scan-table cell as a plain, control-safe, length-bounded string.
+
+    A list/tuple cell (e.g. a device's `services`) is comma-joined and a dict cell rendered as
+    `k=v` pairs, so a container reads `uuid1, uuid2` rather than a raw Python repr; every other
+    value is `str()`-ed. The result is then sanitized (`_scan_sanitize`, control bytes escaped)
+    and, if still wider than `_SCAN_MAX_CELL`, ellipsized - a hostile field cannot blow up a
+    column width. This is display-only and never coerces or interprets a field."""
+    if isinstance(value, (list, tuple)):
+        rendered = ", ".join(str(v) for v in value)
+    elif isinstance(value, dict):
+        rendered = ", ".join(f"{k}={v}" for k, v in value.items())
+    else:
+        rendered = str(value)
+    # Bound the per-cell work BEFORE sanitizing: `_scan_sanitize` walks every character, so a
+    # multi-megabyte cell would escape megabytes even though only ~`_SCAN_MAX_CELL` chars can ever
+    # be shown. Truncate the raw string to a hair over the cap first, so the escaping is O(cap)
+    # regardless of input size. The small margin leaves enough length for the over-long check and
+    # ellipsis below to fire exactly as they would on the full string (each char sanitizes to >= 1
+    # char, so the visible, ellipsized cell is byte-identical to sanitizing the whole value).
+    if len(rendered) > _SCAN_MAX_CELL + 4:
+        rendered = rendered[:_SCAN_MAX_CELL + 4]
+    rendered = _scan_sanitize(rendered)
+    if len(rendered) > _SCAN_MAX_CELL:
+        rendered = rendered[:_SCAN_MAX_CELL - 3] + "..."
+    return rendered
+
+
+def _scan_table(items: list[dict]) -> str:
+    """Render scan rows as an aligned, human-readable TABLE (header row + one row per entry).
+
+    This is the HUMAN pretty-print ONLY; the structured/`op()` result the scripts read is
+    untouched. Columns are the UNION of the per-entry keys (canonical `name/addr/rssi` lead,
+    the rest in first-appearance order), so heterogeneous rows line up with blank cells for the
+    keys they lack. A BLE advertiser's `mfg` (manufacturer_data hex) is surfaced as its own
+    column, so attacker-controlled advertising data is shown explicitly, never folded away.
+    Cells are rendered by `_scan_cell` (scalars `str()`-ed, containers joined, control bytes
+    escaped, over-long cells ellipsized); this never coerces or interprets a field.
+
+    The table is HARD-BOUNDED as a unit: the row count (`_SCAN_MAX_ROWS`), column count
+    (`_SCAN_MAX_COLS`), AND the per-cell work (`_scan_cell` truncates each raw cell to ~
+    `_SCAN_MAX_CELL` before escaping) are all capped, so the total render work is bounded by a fixed
+    constant independent of how large a payload the bridge returns (it does NOT rely on the wire-side
+    size cap). A hostile or buggy bridge returning a huge, key-heterogeneous result therefore cannot
+    build an O(rows x cols) matrix, nor spend O(total-bytes) escaping one giant cell, so it cannot
+    OOM or hang the terminal. Rows and columns beyond the cap are dropped with an explicit trailing
+    note; the structured result is never affected.
+    """
+    total_rows = len(items)
+    shown = items[:_SCAN_MAX_ROWS]
+    cols: list[str] = [c for c in _SCAN_LEAD_COLS if any(c in it for it in shown)]
+    for it in shown:
+        for k in it:
+            if k not in cols:
+                cols.append(k)
+    dropped_cols = 0
+    if len(cols) > _SCAN_MAX_COLS:
+        dropped_cols = len(cols) - _SCAN_MAX_COLS
+        cols = cols[:_SCAN_MAX_COLS]
+    grid = [[_scan_cell(it.get(c, "")) for c in cols] for it in shown]
+    widths = [max(len(cols[i]), *(len(row[i]) for row in grid)) for i in range(len(cols))]
+
+    def _line(cells: list[str]) -> str:
+        return "  ".join(cell.ljust(widths[i]) for i, cell in enumerate(cells)).rstrip()
+
+    lines = [_line(cols)] + [_line(row) for row in grid]
+    if dropped_cols:
+        lines.append(f"... {dropped_cols} more column(s) (truncated)")
+    if total_rows > len(shown):
+        lines.append(f"... {total_rows - len(shown)} more rows (truncated)")
+    return "\n".join(lines)
 
 
 def _hex_field(value, field: str) -> bytes:
@@ -547,18 +680,10 @@ def _dispatch(args, b) -> int:
         if not items:
             print("(nothing on the protocol)")
         else:
-            for it in items:
-                cols = [str(it.get(k, "")) for k in ("name", "addr", "rssi")]
-                # `mfg` is the raw advertising manufacturer_data (company id LE + payload) as hex; a
-                # BLE advertiser can leak data ONLY here, so render it explicitly rather than folding
-                # it into the generic extra dict (docs/design/ble-gatt.md section 6).
-                mfg = it.get("mfg")
-                extra = {k: x for k, x in it.items()
-                         if k not in ("name", "addr", "rssi", "mfg")}
-                line = "  ".join(c for c in cols if c)
-                if mfg:
-                    line += f"  mfg={mfg}"
-                print(line + (f"   {extra}" if extra else ""))
+            # Render an aligned table over the union of the per-entry keys. The `mfg` advertising
+            # manufacturer_data (docs/design/ble-gatt.md section 6) surfaces as its own column, so
+            # attacker-controlled advertising data stays explicit rather than a raw dict dump.
+            print(_scan_table(items))
     elif v == "sniff":
         # sub-GHz tunes the capture by frequency: --freq resolves to the int-channel field.
         channel = _radio_channel(args) if getattr(args, "freq", None) else args.channel
@@ -841,16 +966,19 @@ def _dispatch_spi(args, b) -> None:
         print(_fmt_value(spi.read(b, addr, length, cs=args.cs).get("data", ""), "spi.read data"))
     elif cmd == "write":
         addr = _parse_int(args.addr, "address")
-        _parse_hex(args.hex, "spi write --hex")     # validate operator hex at source, clean error
-        _report_write(spi.write(b, addr, args.hex, cs=args.cs), "write")
+        # Normalize + validate operator hex at source (optional 0x prefix), clean error on bad hex.
+        payload = _hex_value(args.hex, "spi write --hex")
+        _report_write(spi.write(b, addr, payload, cs=args.cs), "write")
     elif cmd == "reg":
         if args.write is not None:
-            _report_write(spi.reg(b, args.name, value_hex=args.write, cs=args.cs), "register write")
+            value_hex = _hex_value(args.write, "spi.reg value")
+            _report_write(spi.reg(b, args.name, value_hex=value_hex, cs=args.cs), "register write")
         else:
             r = spi.reg(b, args.name, cs=args.cs)
             print(f"{r.get('name', args.name)} = {r.get('value', '')}")
     elif cmd == "xfer":
-        print(spi.xfer(b, args.hex, cs=args.cs).get("miso", ""))
+        mosi = _hex_value(args.hex, "spi xfer --hex")
+        print(spi.xfer(b, mosi, cs=args.cs).get("miso", ""))
     elif cmd == "dump":
         addr = _parse_int(args.addr, "address")
         length = _parse_int(args.len, "length")
