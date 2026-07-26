@@ -32,42 +32,60 @@ class RecordingConsole(Console):
 
 
 def _console_against(backend_name: str, target: str, script) -> int:
-    """Drive one `uart console` session (run_console in the MAIN thread) against a bridge."""
+    """Drive one `uart console` session (run_console in the MAIN thread) against a bridge.
+
+    The keystroke `driver` and the hang `watchdog` both write to `master`; they are gated on a
+    `finished` Event and JOINED before `master` is closed. This is load-bearing for the harness'
+    own soundness: a thread that wrote to `master` AFTER the finally closed it would land on a
+    REUSED fd (the next session's pty master or the bridge socket) and inject a stray ESCAPE into
+    an unrelated device-visible stream. All sleeps are `finished.wait(...)` so setting the Event
+    wakes both threads at once, and the watchdog only fires the failsafe ESCAPE on a genuine hang.
+    """
     backend = _make_backend(backend_name, target)
     backend.open()
     channel = backend.stream_open("duplex")
     master, slave = os.openpty()
     r_out, w_out = os.pipe()
+    finished = threading.Event()
 
     def driver():
-        time.sleep(0.5)                          # daemon banner buffered + attach-clean finishes
+        if finished.wait(0.5):                   # daemon banner buffered + attach-clean finishes
+            return
         for chunk in script:
+            if finished.is_set():
+                return
             os.write(master, chunk)
-            time.sleep(0.1)
-        time.sleep(0.3)
+            if finished.wait(0.1):
+                return
+        if finished.wait(0.3):
+            return
         os.write(master, bytes((console.ESCAPE,)))
 
     def watchdog():
-        time.sleep(10.0)
+        if finished.wait(10.0):
+            return                               # clean detach happened: never touch the fd
         try:
             os.write(master, bytes((console.ESCAPE,)))
         except OSError:
             pass
 
     t = threading.Thread(target=driver, daemon=True)
+    w = threading.Thread(target=watchdog, daemon=True)
     t.start()
-    threading.Thread(target=watchdog, daemon=True).start()
+    w.start()
     try:
         code = console.run_console(channel, stdin_fd=slave, stdout_fd=w_out,
                                    attach_banner="[probe] attached")
     finally:
+        finished.set()                           # wake both writers so the joins return at once
+        t.join(timeout=2.0)
+        w.join(timeout=2.0)
         os.close(w_out)
         while os.read(r_out, 65536):             # drain so the console's writer never blocks
             pass
         os.close(r_out)
-        t.join(timeout=1.0)
         backend.close()
-        os.close(master)
+        os.close(master)                         # safe: no writer thread is alive past the joins
         os.close(slave)
     return code
 

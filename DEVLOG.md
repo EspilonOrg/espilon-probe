@@ -1,5 +1,40 @@
 # DEVLOG
 
+## fix(test): stop the console-fidelity harness leaking a stray ESCAPE across sessions
+
+The `test (3.10)` CI job went red on the console-fidelity test while `3.11`/`3.12` stayed green.
+It is not a 3.10 language issue: the test is timing-flaky and 3.10 simply lost the race that run.
+
+### What
+
+`tests/test_console_fidelity.py::_console_against` spawned two daemon threads (`driver`,
+`watchdog`) that write to the session's pty `master` fd, and the `finally` closed `master`
+(and `slave`) with only a `t.join(timeout=1.0)` on the driver and NO join on the watchdog. Under
+load a pending thread could still write `console.ESCAPE` (`0x1d`) to `master` AFTER the finally
+closed it, so the write landed on a REUSED fd - the next session's pty master or the bridge's
+client socket - and injected a stray escape into an unrelated device-visible stream. That is
+exactly the CI signature: both streams carried the full tape plus one extra `\x1d`, at opposite
+ends (an injection that fired early lands at the start, late lands at the end).
+
+The fix gates both threads on a `threading.Event` (`finished`): every sleep is `finished.wait(...)`,
+so setting the Event wakes both at once, the watchdog fires its failsafe escape only on a genuine
+hang, and the `finally` sets `finished` and JOINS both threads before closing any fd. No writer
+thread can outlive the close, so no write can ever reach a reused fd.
+
+### Why
+
+The harness' own thread lifecycle was unsound: a fd closed while a writer thread might still use it.
+This is the root cause of the red CI, and it can corrupt any co-running session, so the fix makes
+the teardown deterministic rather than widening the sleeps. `requires-python` stays `>=3.10`:
+3.10 is a correct, supported target and now passes.
+
+### Tests
+
+No assertion change (still asserts the two device-visible streams are byte-identical and the tape
+reached the device). Full suite green on 3.10 and 3.11 (366 passed, 4 skipped); a 30x in-process
+stress loop of the two-phase scenario under CPU load goes from ~10/40 corrupted streams on the old
+harness to 0/30 on the fixed one.
+
 ## fix(release): clean the build dir and bound single-shot spi/jtag reads
 
 Two small pre-public-release fixes surfaced by the adversarial review.
