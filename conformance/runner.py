@@ -13,9 +13,29 @@ green.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
+
+
+def _probe_env(env: dict | None) -> dict | None:
+    """Ensure the `probe` subprocess can import `espilon_probe` in a SOURCE-ONLY checkout.
+
+    A side supplies a custom `env` dict that REPLACES the parent environment when launching
+    `probe`. In a non-installed checkout the parent found `espilon_probe` via an in-process
+    `sys.path` entry (conftest), which a replaced-env child does not inherit, so `-m
+    espilon_probe.cli` would die `ModuleNotFoundError`. We prepend the package's import root
+    (derived from `espilon_probe.__file__`) to the child's `PYTHONPATH`. When `env is None` the
+    child inherits the parent environment untouched."""
+    if env is None:
+        return None
+    import espilon_probe
+    pkg_root = os.path.dirname(os.path.dirname(os.path.abspath(espilon_probe.__file__)))
+    out = dict(env)
+    existing = out.get("PYTHONPATH", "")
+    out["PYTHONPATH"] = pkg_root + (os.pathsep + existing if existing else "")
+    return out
 
 
 @dataclass
@@ -54,7 +74,8 @@ def run_tape(backend: str, target: str, steps: list[dict], env: dict | None = No
             expect = [expect]
         cmd = [sys.executable, "-m", "espilon_probe.cli",
                "--backend", backend, "--target", target, *[str(a) for a in argv]]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=_STEP_TIMEOUT, env=env)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=_STEP_TIMEOUT,
+                              env=_probe_env(env))
         results.append(StepResult(argv=[str(a) for a in argv], stdout=proc.stdout,
                                   exit_code=proc.returncode, expect=list(expect),
                                   stderr=proc.stderr))

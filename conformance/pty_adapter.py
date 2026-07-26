@@ -22,7 +22,7 @@ import sys
 import tempfile
 import threading
 
-from espilon_probe.backends.serial import _runtime_dir, _target_key
+from espilon_probe.backends.serial import _child_env, _runtime_dir, _target_key
 
 from .console import Console
 
@@ -138,7 +138,8 @@ class ConformanceRealSide:
                "--announce", self._info_path, "--idle-timeout", "30"]
         if self.reset_on_open:
             cmd.append("--reset-on-open")            # harmless no-op on a pty; exercises the path
-        self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                      env=_child_env())
         os.close(slave)                              # the daemon holds its own fd on the path
         self._await_ready()
         # Daemon slave is open now -> boot the device (banner will be captured into the RX FIFO).
@@ -238,7 +239,8 @@ class RealDeviceSide:
                "--announce", self._info_path, "--idle-timeout", "60"]
         if self.reset_on_open:
             cmd.append("--reset-on-open")
-        self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                      env=_child_env())
         line = self._proc.stdout.readline() if self._proc.stdout else ""
         if not line.strip().startswith(_READY_PREFIX):
             err = self._proc.stderr.read() if self._proc.stderr else ""

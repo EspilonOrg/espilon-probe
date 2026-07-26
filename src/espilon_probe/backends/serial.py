@@ -170,12 +170,31 @@ def _port_reachable(port: int, attempts: int = 1) -> bool:
     return False
 
 
+def _child_env() -> dict:
+    """Environment for the spawned bridge child, with THIS package's import root on `PYTHONPATH`.
+
+    `python -m espilon_probe.bridges` only resolves if `espilon_probe` is importable in the child.
+    A pip-installed package resolves from site-packages, but a SOURCE-only checkout (the running
+    process found the package via a `sys.path` entry the child does not inherit) leaves the child
+    with `ModuleNotFoundError: No module named 'espilon_probe'`. We derive the package's import
+    root from `espilon_probe.__file__` (the parent of the package directory) and PREPEND it to the
+    child's `PYTHONPATH`, so `--backend serial` works whether or not the package is installed."""
+    env = dict(os.environ)
+    import espilon_probe
+    pkg_root = os.path.dirname(os.path.dirname(os.path.abspath(espilon_probe.__file__)))
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = pkg_root + (os.pathsep + existing if existing else "")
+    return env
+
+
 def _spawn_daemon(medium: str, endpoint: str, baud: int, info_path: str) -> int:
     """Spawn a DETACHED persistent bridge daemon and wait for it to announce its port.
 
     Detached (start_new_session=True, stdio to devnull) so it OUTLIVES this `probe` process. Invoked
-    via `python -m espilon_probe.bridges` so a source checkout works; inherits the environment
-    (PYTHONPATH) so a non-installed `espilon_probe` resolves in the child."""
+    via `python -m espilon_probe.bridges`. The child is given a `PYTHONPATH` carrying this package's
+    import root (`_child_env`) so a non-installed `espilon_probe` (a source-only checkout) resolves
+    in the child, which would otherwise die `ModuleNotFoundError` because the subprocess does not
+    inherit the parent's in-process `sys.path`."""
     cmd = [sys.executable, "-m", "espilon_probe.bridges",
            "--medium", medium, "--endpoint", endpoint,
            "--listen", "127.0.0.1:0", "--baud", str(baud),
@@ -183,7 +202,8 @@ def _spawn_daemon(medium: str, endpoint: str, baud: int, info_path: str) -> int:
     devnull = open(os.devnull, "wb")
     try:
         proc = subprocess.Popen(cmd, stdout=devnull, stderr=devnull,
-                                stdin=subprocess.DEVNULL, start_new_session=True)
+                                stdin=subprocess.DEVNULL, start_new_session=True,
+                                env=_child_env())
     finally:
         devnull.close()
 
