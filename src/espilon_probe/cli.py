@@ -212,6 +212,28 @@ def build_parser() -> argparse.ArgumentParser:
     spd.add_argument("-w", "--write", required=True, metavar="BIN")
     spd.add_argument("--pcap", metavar="PCAP", help="also write an optional transaction pcap")
 
+    ic = sub.add_parser("i2c", help="I2C master operations (transaction protocol)")
+    ics = ic.add_subparsers(dest="i2c_cmd", required=True)
+    ics.add_parser("scan", help="sweep the bus for live 7-bit slave addresses (ACK/NACK)")
+    icr = ics.add_parser("read", help="read bytes from a slave (optionally at a register pointer)")
+    icr.add_argument("--addr", required=True, help="7-bit slave address (hex or int)")
+    icr.add_argument("--reg", help="register/memory pointer to read from (hex or int)")
+    icr.add_argument("-n", "--len", required=True, help="number of bytes to read (hex or int)")
+    icw = ics.add_parser("write", help="write bytes to a slave (optionally at a register pointer)")
+    icw.add_argument("--addr", required=True, help="7-bit slave address (hex or int)")
+    icw.add_argument("--reg", help="register/memory pointer to write at (hex or int)")
+    icw.add_argument("--hex", required=True, help="hex payload")
+    icg = ics.add_parser("reg", help="read/write a named register")
+    icg.add_argument("name", help="register name (e.g. config)")
+    icg.add_argument("--read", action="store_true", help="read the register (default)")
+    icg.add_argument("--write", metavar="HEX", help="write the register with a hex value")
+    icd = ics.add_parser("dump", help="dump a whole EEPROM to a raw binary image")
+    icd.add_argument("--addr", required=True, help="7-bit slave address (hex or int)")
+    icd.add_argument("--reg", default="0", help="start register/memory pointer (hex or int, default 0)")
+    icd.add_argument("--size", help="bytes to read (hex or int; default: the size the scan advertised)")
+    icd.add_argument("-w", "--write", required=True, metavar="BIN")
+    icd.add_argument("--pcap", metavar="PCAP", help="also write an optional transaction pcap")
+
     ep = sub.add_parser("esp", help="ESP32 eFuse / secure-boot / flash-encryption (transaction "
                                     "protocol; the boot banner is read with `probe uart read`)")
     eps = ep.add_subparsers(dest="esp_cmd", required=True)
@@ -586,6 +608,7 @@ _VERB_REQUIRES = {
     "uart": "uart",
     "jtag": "jtag",
     "spi": "spi",
+    "i2c": "i2c",
     "esp": "esp",
     "subghz": "subghz",
 }
@@ -602,6 +625,7 @@ _PROTOCOL_VERB = {
     "uart": "uart",
     "jtag": "jtag",
     "spi": "spi",
+    "i2c": "i2c",
     "esp": "esp",
     "subghz": "subghz",
 }
@@ -672,6 +696,9 @@ def _dispatch(args, b) -> int:
         elif proto == "spi":
             from .protocols import spi
             items = spi.scan_rows(b)
+        elif proto == "i2c":
+            from .protocols import i2c
+            items = i2c.scan_rows(b)
         else:
             items = _scan_rows(b.scan(seconds=_scan_seconds(args, getattr(args, "_cfg", None)),
                                       count=args.count))
@@ -757,6 +784,8 @@ def _dispatch(args, b) -> int:
         _dispatch_jtag(args, b)
     elif v == "spi":
         _dispatch_spi(args, b)
+    elif v == "i2c":
+        _dispatch_i2c(args, b)
     elif v == "esp":
         _dispatch_esp(args, b)
     elif v == "subghz":
@@ -983,6 +1012,42 @@ def _dispatch_spi(args, b) -> None:
         addr = _parse_int(args.addr, "address")
         length = _parse_int(args.len, "length")
         n = spi.dump(b, length, args.write, addr=addr, cs=args.cs, pcap_path=args.pcap)
+        print(f"dumped {n} byte(s) -> {args.write}"
+              + (f" (pcap -> {args.pcap})" if args.pcap else ""))
+
+
+def _dispatch_i2c(args, b) -> None:
+    from .protocols import i2c
+    cmd = args.i2c_cmd
+    if cmd == "scan":
+        rows = i2c.scan_rows(b)
+        if not rows:
+            print("(no devices ACKed on the bus)")
+        else:
+            print(_scan_table(rows))
+    elif cmd == "read":
+        addr = _parse_int(args.addr, "slave address")
+        length = _parse_int(args.len, "length")
+        reg = _parse_int(args.reg, "register pointer") if args.reg is not None else None
+        print(_fmt_value(i2c.read(b, addr, length, reg=reg).get("data", ""), "i2c.read data"))
+    elif cmd == "write":
+        addr = _parse_int(args.addr, "slave address")
+        reg = _parse_int(args.reg, "register pointer") if args.reg is not None else None
+        # Normalize + validate operator hex at source (optional 0x prefix), clean error on bad hex.
+        payload = _hex_value(args.hex, "i2c write --hex")
+        _report_write(i2c.write(b, addr, payload, reg=reg), "write")
+    elif cmd == "reg":
+        if args.write is not None:
+            value_hex = _hex_value(args.write, "i2c.reg value")
+            _report_write(i2c.reg(b, args.name, value_hex=value_hex), "register write")
+        else:
+            r = i2c.reg(b, args.name)
+            print(f"{r.get('name', args.name)} = {r.get('value', '')}")
+    elif cmd == "dump":
+        addr = _parse_int(args.addr, "slave address")
+        reg_base = _parse_int(args.reg, "register pointer")
+        size = _parse_int(args.size, "size") if args.size is not None else None
+        n = i2c.dump(b, addr, args.write, size=size, reg_base=reg_base, pcap_path=args.pcap)
         print(f"dumped {n} byte(s) -> {args.write}"
               + (f" (pcap -> {args.pcap})" if args.pcap else ""))
 

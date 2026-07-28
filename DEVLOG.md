@@ -1,5 +1,40 @@
 # DEVLOG
 
+## feat(i2c): add the `i2c` master transaction protocol + verb group
+
+### What
+
+A new `i2c` protocol (master role), mirroring the `spi` transaction/register model:
+
+  - `src/espilon_probe/protocols/i2c.py`: the verb group over `Backend.op`. Named transactions
+    `i2c.scan` (bus address sweep -> which 7-bit slaves ACK), `i2c.read` (bytes at an optional
+    register pointer), `i2c.write` (page write at an optional pointer), `i2c.reg` (named register
+    read/write). `scan_rows` flattens the sweep into the generic scan-row shape (one row per
+    ACKing device). `dump` is bounded client-side sugar over `i2c.read` (whole-EEPROM raw image),
+    sizing the read from `--size` or the size the sweep advertised, refusing an unknown length
+    rather than guessing. Malformed/null backend results fail clean (`ProbeError`), never a
+    traceback.
+  - `cli.py`: the `i2c` subparser (scan/read/write/reg/dump), dispatch, the capability-gate and
+    protocol-verb maps, and core-`scan` routing (`probe scan` on an i2c bus enumerates addresses).
+    Operator hex goes through the shared hardened `_hex_value` (accepts `0x`, rejects empty/blank).
+  - `core/frame.py`: `DLT_USER_PROBE_I2C = 151` (USER4) for the optional transaction pcap.
+
+Stdlib-only; no new core dependency. `sniff`/`inject`/`replay` stay gated OUT (transaction
+protocol, master role); the CLI capability gate refuses them cleanly.
+
+### Why
+
+I2C is earmarked in the tool ROADMAP as another transaction/register protocol, so I2C EEPROM /
+register labs can be built with the same command surface as spi.
+
+### Tests
+
+`tests/test_i2c.py` (29 cases): bus-scan enumeration + NACK-only bus, register-pointer read/write
+round-trip, NACK on an absent address, advisory write-protect, dump (advertised size + explicit
+`--size` + pcap DLT 151 + refusal without a size), the dump/read bounds, malformed-response
+robustness, and the `0x`-hex handling (accept `0x`, reject empty/blank/bad). Full client suite
+green (407 passed, 3 skipped).
+
 ## test(console): fix the ACTUAL perpetrator - test_console.py's leaked watchdog
 
 Follow-up to the console-fidelity harness fix below (`fix(test): join console-fidelity harness
