@@ -34,6 +34,7 @@ probe-bridge = "espilon_probe.bridges.cli:main"
 
 [project.optional-dependencies]
 hci = ["bleak>=0.21"]   # real BLE central over BlueZ (lazy import in bridges/media/hci.py only)
+ftdi = ["pyftdi>=0.55"]  # real SPI/I2C master over FT232H/FT2232H (lazy import in bridges/media/ftdi.py only)
 # Reserved for future hardware backends, each a thin adapter behind its own extra:
 #   killerbee  - 802.15.4 / Zigbee
 #   sdr        - sub-GHz via SoapySDR

@@ -241,7 +241,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _make_backend(name: str, target: str | None, baud: int = 115200):
+def _make_backend(name: str, target: str | None, baud: int = 115200, verb: str | None = None):
     if name == "virtual":
         from .backends.virtual import VirtualBackend
         return VirtualBackend(target, baud=baud)
@@ -259,7 +259,16 @@ def _make_backend(name: str, target: str | None, baud: int = 115200):
         # extra fails with one clear line; the client core stays stdlib-only.
         from .backends.hci import HciBackend
         return HciBackend(target, baud=baud)
-    raise SystemExit(f"probe: backend '{name}' is not implemented yet (planned hardware backends = killerbee/sdr/openocd/ftdi).")
+    if name == "ftdi":
+        # The real SPI (later I2C) leg: a loopback launcher that spawns the `probe-bridge --medium
+        # ftdi-spi` daemon (pyftdi over an FT232H/FT2232H, behind the `[ftdi]` extra) and holds the
+        # adapter across the per-verb `probe spi` processes (docs/design/real-bus-backends.md
+        # sections 1-2). pyftdi is imported LAZILY inside the medium, so selecting ftdi without the
+        # extra fails with one clear line; the client core stays stdlib-only. `verb` picks SPI vs I2C
+        # mode (the operator already typed the verb group; no --mode flag).
+        from .backends.ftdi import FtdiBackend, _ftdi_mode
+        return FtdiBackend(target, baud=baud, mode=_ftdi_mode(verb))
+    raise SystemExit(f"probe: backend '{name}' is not implemented yet (planned hardware backends = killerbee/sdr/openocd).")
 
 
 def _parse_int(text: str, what: str = "value") -> int:
@@ -1288,7 +1297,7 @@ def main(argv: list[str] | None = None) -> int:
 
     _resolve_config_defaults(args, cfg)
     _config_source_notice(args)
-    backend = _make_backend(args.backend, args.target, baud=args.baud)
+    backend = _make_backend(args.backend, args.target, baud=args.baud, verb=args.verb)
     try:
         backend.open()
     except Exception as e:

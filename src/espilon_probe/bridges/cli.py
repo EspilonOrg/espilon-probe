@@ -48,7 +48,15 @@ def _make_medium(name: str, endpoint: str, baud: int, reset_on_open: bool = Fals
         # target and the D-Bus-error -> ATT-code map.
         from .media.hci import HciMedium
         return HciMedium(endpoint)
-    # Other hardware media (ftdi, openocd, sdr, killerbee...) land later, each importing its own
+    if name == "ftdi-spi":
+        # Real SPI master over an FT232H/FT2232H (pyftdi), behind the [ftdi] extra. The import of
+        # pyftdi is LAZY, inside SpiFtdiMedium.open(), so selecting ftdi-spi here without the extra
+        # installed fails with a clear, actionable error and NOTHING imports pyftdi at module load
+        # (docs/design/real-bus-backends.md section 2). The I2C twin (ftdi-i2c) lands with the i2c
+        # protocol; until then it falls through to the clean refusal below.
+        from .media.ftdi import SpiFtdiMedium
+        return SpiFtdiMedium(endpoint, baud=baud)
+    # Other hardware media (ftdi-i2c, openocd, sdr, killerbee...) land later, each importing its own
     # optional dependency lazily inside its module. Refuse clean until then.
     raise SystemExit(f"probe-bridge: medium {name!r} is not implemented yet")
 

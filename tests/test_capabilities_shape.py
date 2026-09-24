@@ -20,6 +20,20 @@ def test_shape_defaults_to_packet():
     assert c.shape == "packet"
 
 
+def test_ftdi_spi_medium_is_transaction_and_advertises_only_spi():
+    # The ftdi SPI medium advertises its static caps with NO pyftdi and NO adapter (caps() touches
+    # neither), mirroring the CanMedium static-caps check below. shape=transaction, verbs=[scan,spi]
+    # only, so the client gate refuses the other buses and the relay verbs (docs/design/
+    # real-bus-backends.md sections 2.4, 4).
+    from espilon_probe.bridges.media.ftdi import SpiFtdiMedium
+    caps = SpiFtdiMedium("ftdi://ftdi:232h/1").caps()
+    assert caps["shape"] == "transaction"
+    assert caps["protocol"] == "spi"
+    assert caps["verbs"] == ["scan", "spi"]
+    for gated in ("jtag", "i2c", "sniff", "inject", "replay", "gatt"):
+        assert gated not in caps["verbs"]
+
+
 def test_socketcan_is_packet_and_serial_is_stream(probe_runtime):
     # socketcan is now a loopback launcher too; its packet shape is advertised by the bridge's
     # CanMedium (static caps, no socket needed). The serial backend's caps come from the bridge over

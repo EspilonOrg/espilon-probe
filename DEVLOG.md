@@ -1,5 +1,41 @@
 # DEVLOG
 
+## feat(ftdi): real FT232H SPI read path (spi.id + spi.read), the first real-bus increment
+
+First increment of the real-hardware backends spec (docs/design/real-bus-backends.md section 7
+step 1): the FT232H SPI READ PATH, the highest-value demo (ESP32 external-flash extraction) at the
+least code. It exercises the whole thin-launcher + transaction-medium path end to end.
+
+### What
+
+- `backends/ftdi.py`: `FtdiBackend(VirtualBackend)`, `_transport_label = "ftdi"`, a thin loopback
+  launcher mirroring serial/socketcan/hci. `open()` maps the verb group to a mode (`spi`/`scan`/
+  `info` -> SPI; `i2c` -> the later I2C twin, no `--mode` flag) and calls `_ensure_bridge("ftdi-spi",
+  ...)`. Introduces NO import in the client core.
+- `bridges/media/ftdi.py`: `SpiFtdiMedium` (shape `"transaction"`), pyftdi imported LAZILY inside
+  `open()`. Ops this increment: `spi.id` (RDID 0x9F, 3 id bytes, 24-bit JEDEC + descriptive part
+  name), `spi.read` (READ 0x03 + 24-bit addr, EXACTLY `len` bytes, a short read is a hard error),
+  `scan` (JEDEC enumerate), plus `caps`/`open`/`close`/`apply_config({spi_hz})`/`alive`. `caps()`
+  advertises ONLY the `spi` group, so the capability gate refuses other buses and the relay verbs.
+  The JEDEC part name is descriptive metadata that degrades to unknown, never guessed. `spi.write`/
+  `spi.reg`/`spi.xfer` are DEFERRED: advertised in the group but refused LOUD, never fabricated.
+- Wiring: `bridges/cli._make_medium` gains an `ftdi-spi` branch; `cli._make_backend` gains an `ftdi`
+  branch (drops `ftdi` from the not-implemented `SystemExit`) and now receives the verb group;
+  `pyproject.toml` gains `ftdi = ["pyftdi>=0.55"]`.
+- Tests (hardware-free, against a FAKE pyftdi controller): exact MPSSE bytes for `spi id` (`0x9F`,
+  read 3) and `spi read` (`0x03`+24-bit addr, exact len), short-read-is-hard-error, untrusted-arg
+  coercion, deferred-op loud refusal, `apply_config` clock, and an end-to-end C1 gate over the real
+  client + real `_serve_op` bridge (`jtag`/relay/wrong-op refuse clean; `spi id`/`read`/`scan`/`dump`
+  round-trip real bytes). `test_capabilities_shape.py` gains the transaction-shape/verbs check.
+
+### Why
+
+Closes the virtual-only gap for the dual-mode SPI course: the same `probe spi` verbs run against a
+real ESP32 flash over a SOIC-8 clip or the virtual model, authored once. The client stays a
+stdlib-only generalist (pyftdi is lazy in the medium behind the `[ftdi]` extra; core imports with
+pyftdi absent and the missing extra fails with one actionable line). On-hardware smoke (a real
+FT232H + ESP32 flash dump) is DEFERRED to an adapter and makes NO real-silicon claim here.
+
 ## test(console): fix the ACTUAL perpetrator - test_console.py's leaked watchdog
 
 Follow-up to the console-fidelity harness fix below (`fix(test): join console-fidelity harness
