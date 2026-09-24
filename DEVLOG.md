@@ -1,5 +1,38 @@
 # DEVLOG
 
+## fix(ftdi): close DoS/UX gaps in the FT232H SPI read increment (adversarial review)
+
+Adversarial review of the SPI read increment confirmed the core sound (MPSSE correct, short read a
+hard error, no fabrication, server-side capability gate) but found DoS/UX gaps the fake controller
+could not surface. Each fix ships with a NEGATIVE test that goes red if the fix regresses; the
+daemon-wedge and unbounded-read fixes were plant-the-defect verified.
+
+### What
+
+- `protocols/spi.py`: a single `spi.read` is now bounded by `READ_MAX_BYTES` (= the dump ceiling
+  concept), so a raw `read --len 0x40000000` is refused before it clocks a gigabyte over USB, not
+  just the chunked `dump` loop. `dump` now refuses UP FRONT, before opening the output file, when the
+  requested range passes the 24-bit address reach (0xFFFFFF); it used to fail mid-loop at 16 MiB and
+  leave a partial file. 4-byte addressing is called out as a later increment.
+- `bridges/media/ftdi.py`: `_spi_read` mirrors the single-read ceiling so the bound holds regardless
+  of the client (a hostile `len` off the wire). `open()` now `terminate()`s the freshly built
+  `SpiController` when `configure()` raises, instead of leaking an unterminated controller.
+- `bridges/server.py`: the `_serve_op` SCAN branch is wrapped like the OP branch, so a raising
+  `medium.scan()` (a real RDID over a bad clip contact) returns a clean wire ERROR instead of
+  escaping `serve_forever` and ending the daemon thread (a wedge: socket bound, nothing accepting).
+  Generic: helps every transaction medium.
+- `backends/serial.py`: the spawned daemon's stderr is captured to a temp file (was discarded to
+  devnull), and its last line is surfaced in the launcher's error, so a pyftdi-absent or
+  medium-not-implemented failure shows the actionable reason instead of only "exited before
+  announcing (code 1)". Shared launcher code, so serial/hci benefit too.
+
+### Why
+
+The fake pyftdi controller proves the happy path and the honesty invariants, but it cannot exercise
+a wire-length DoS, a socket-level daemon wedge, a detached-child stderr channel, or a real USB
+resource leak. Those are exactly the gaps a real adapter (or a hostile client) would hit. No
+real-silicon claim is added; every new test runs hardware-free.
+
 ## feat(ftdi): real FT232H SPI read path (spi.id + spi.read), the first real-bus increment
 
 First increment of the real-hardware backends spec (docs/design/real-bus-backends.md section 7
