@@ -310,8 +310,15 @@ class BridgeServer:
                     continue
                 wire.send(w, {"t": wire.OP_RESULT, "result": result})
             elif t == wire.SCAN:
-                wire.send(w, {"t": wire.SCAN_RESULT,
-                              "items": self.medium.scan(**self._scan_args(msg))})
+                # Wrap `scan()` the same way OP is wrapped above: a raising scan (a real medium's
+                # RDID over a bad clip contact raises) must return a clean wire ERROR, never escape
+                # to serve_forever and END the daemon thread (a wedge: socket bound, nothing accepts).
+                try:
+                    items = self.medium.scan(**self._scan_args(msg))
+                except Exception as e:
+                    wire.send(w, wire.error(f"scan failed: {e}"))
+                    continue
+                wire.send(w, {"t": wire.SCAN_RESULT, "items": items})
             elif t in (wire.SNIFF, wire.INJECT, wire.REPLAY):
                 wire.send(w, wire.error(
                     f"relay verb {t!r} is not supported on a transaction bridge"))
