@@ -31,6 +31,7 @@ from espilon_probe.backends.virtual import VirtualBackend
 from espilon_probe.bridges.media import ftdi
 from espilon_probe.bridges.server import BridgeServer
 from espilon_probe.core import wire
+from espilon_probe.protocols import spi
 
 # A deterministic backing flash for the fake adapter: a Winbond W25Q32 (JEDEC 0xEF4016) plus 4 KiB of
 # reproducible content, so a read returns known bytes and the JEDEC name table is exercised.
@@ -212,6 +213,26 @@ def test_spi_read_coerces_untrusted_args_authoritatively(fake_pyftdi):
         m.close()
 
 
+def test_spi_read_over_ceiling_length_refused_at_medium(fake_pyftdi):
+    # The single-read ceiling is mirrored in the medium so it holds regardless of the client: a
+    # hostile `len` off the wire (e.g. 0x40000000) is refused before the fake port is ever asked to
+    # clock it, and a valid small read still works. NEGATIVE test for the unbounded-read fix.
+    m = _open()
+    try:
+        with pytest.raises(ValueError) as ei:
+            m.op("spi.read", {"addr": 0, "len": spi.READ_MAX_BYTES + 1})
+        assert "single-read ceiling" in str(ei.value)
+        # the fake adapter never clocked an over-ceiling exchange
+        port = m._ports.get(0)
+        if port is not None:
+            assert all(readlen <= spi.READ_MAX_BYTES for _, readlen in port.exchanges)
+        # a valid small read still round-trips exactly `len` bytes
+        res = m.op("spi.read", {"addr": 0, "len": 8})
+        assert len(bytes.fromhex(res["data"])) == 8
+    finally:
+        m.close()
+
+
 def test_deferred_ops_refuse_loud_not_fabricate(fake_pyftdi):
     # spi.write/reg/xfer are advertised as part of the group but not implemented on this real medium
     # yet: each must refuse LOUD, never return a fabricated result.
@@ -348,3 +369,55 @@ def test_cli_spi_write_over_ftdi_refuses_loud_deferred(ftdi_bridge, capsys, monk
     with pytest.raises(SystemExit) as ei:
         _run(["spi", "write", "--addr", "0", "--hex", "aa"], ftdi_bridge, capsys, monkeypatch)
     assert "not implemented" in str(ei.value)
+
+
+# --- server: a raising scan() must not wedge the daemon (generic _serve_op fix) -------------------
+
+class _ScanBoomMedium:
+    """A minimal transaction medium whose scan() raises (like a real RDID over a bad clip contact)
+    but whose op() works. Proves the _serve_op SCAN branch returns a clean wire ERROR and keeps the
+    daemon serving, instead of letting the exception escape serve_forever and END the thread."""
+
+    shape = "transaction"
+
+    def open(self):
+        pass
+
+    def apply_config(self, config):
+        pass
+
+    def caps(self):
+        return {"protocol": "spi", "channels": [], "verbs": ["scan", "spi"],
+                "shape": "transaction", "meta": {}}
+
+    def scan(self, seconds=None, count=None):
+        raise RuntimeError("RDID short read: check the clip contact")
+
+    def op(self, verb, args):
+        return {"ok": True, "verb": verb}
+
+    def alive(self):
+        return True
+
+    def close(self):
+        pass
+
+
+def test_raising_scan_returns_wire_error_and_daemon_survives():
+    # NEGATIVE test for the daemon-wedge fix. Without the try/except around the SCAN branch, the
+    # raising scan() escapes serve_forever, ends the serve thread, and the SECOND connection below
+    # can never get a WELCOME (socket bound, nothing accepting) -> this test fails.
+    medium = _ScanBoomMedium()
+    server, port = _serve(medium)
+    url = f"tcp://127.0.0.1:{port}"
+    try:
+        # 1) a scan gets a clean wire error, not a hang or a raw traceback
+        with VirtualBackend(url) as b1:
+            with pytest.raises(RuntimeError) as ei:
+                b1.scan()
+            assert "scan failed" in str(ei.value)
+        # 2) the daemon is still alive: a FRESH connection still handshakes and serves an op
+        with VirtualBackend(url) as b2:
+            assert b2.op("spi.id") == {"ok": True, "verb": "spi.id"}
+    finally:
+        server.close()

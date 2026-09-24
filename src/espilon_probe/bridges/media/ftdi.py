@@ -123,7 +123,13 @@ class SpiFtdiMedium:
             ctrl.configure(self.endpoint)
         except Exception as e:
             # A bad URL / no adapter present: fail loud so the launcher surfaces the nonzero exit
-            # (docs/design/real-bus-backends.md section 4 point 2), never a half-open medium.
+            # (docs/design/real-bus-backends.md section 4 point 2), never a half-open medium. The
+            # controller was built but never stored, so release its USB resources before raising
+            # rather than leaking an unterminated SpiController.
+            try:
+                ctrl.terminate()
+            except Exception:
+                pass
             raise RuntimeError(f"cannot open FTDI SPI adapter at {self.endpoint!r}: {e}")
         self._ctrl = ctrl
 
@@ -230,6 +236,12 @@ class SpiFtdiMedium:
         section 5.1). `addr`/`length` are already coerced from the untrusted wire args."""
         if length <= 0:
             raise ValueError(f"spi.read: length {length} must be positive")
+        if length > spi.READ_MAX_BYTES:
+            # Mirror the client-side single-read ceiling here so it holds regardless of the client:
+            # a hostile `len` off the wire cannot clock a gigabyte over USB before this refusal.
+            raise ValueError(
+                f"spi.read: length {length} exceeds the single-read ceiling "
+                f"{spi.READ_MAX_BYTES} bytes")
         if addr < 0 or addr > 0xFFFFFF:
             raise ValueError(f"spi.read: addr 0x{addr:x} out of the 24-bit range (0..0xFFFFFF)")
         cmd = bytes([_READ, (addr >> 16) & 0xFF, (addr >> 8) & 0xFF, addr & 0xFF])
