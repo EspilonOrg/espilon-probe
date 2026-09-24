@@ -38,6 +38,18 @@ PCAP_DLT = DLT_USER_PROBE_SPI           # 148, optional transaction pcap only
 DUMP_MAX_BYTES = 32 * 1024 * 1024
 _READ_CHUNK_BYTES = 4096
 
+# Single-shot `spi.read` ceiling: the raw `read` verb is not chunked, so without a bound a hostile
+# `--len 0x40000000` would clock 1 GiB over USB. It reuses the dump ceiling concept - a single read
+# can never exceed what a whole dump may cover. The guard lives here (so it holds for every client)
+# and is mirrored in the ftdi medium (so it holds regardless of client).
+READ_MAX_BYTES = DUMP_MAX_BYTES
+
+# The wire `spi.read` op carries a 24-bit start address (docs/protocols/spi.md), so the reachable
+# byte range is 0..0xFFFFFF (16 MiB). A range past this needs 4-byte addressing, deferred to a later
+# increment; `dump` refuses such a request UP FRONT rather than failing mid-loop with a partial file.
+ADDR_24BIT_MAX = 0xFFFFFF
+_ADDR_24BIT_REACH = ADDR_24BIT_MAX + 1
+
 # transaction pcap op codes (docs/protocols/spi.md section 4)
 _OP_ID = 1
 _OP_READ = 2
@@ -78,6 +90,12 @@ def read(backend: Backend, addr: int, length: int, cs: int = 0) -> dict:
     # never reaches the backend (the same bound `dump` enforces, applied to the sugar's core op).
     if length <= 0:
         raise ProbeError(f"spi read: length {length} must be positive")
+    # ...and bounded: the raw `read` verb is not chunked, so an over-large `--len` (e.g.
+    # 0x40000000) would clock a gigabyte over USB. Refuse it before it reaches the backend.
+    if length > READ_MAX_BYTES:
+        raise ProbeError(
+            f"spi read: length {length} exceeds the single-read ceiling {READ_MAX_BYTES} bytes; "
+            f"refusing an unbounded read")
     return _result(backend, "spi.read", addr=addr, len=length, cs=cs)
 
 
@@ -130,6 +148,14 @@ def dump(backend: Backend, length: int, out_path: str, addr: int = 0,
         raise ProbeError(
             f"spi dump: length {length} exceeds the client ceiling {DUMP_MAX_BYTES} bytes; "
             f"refusing an unbounded dump")
+    # The reachable range is bounded by the wire op's 24-bit address. A dump past 0xFFFFFF would
+    # otherwise fail MID-LOOP once `cur` crossed the reach, leaving a partial file on disk. Refuse
+    # UP FRONT, before opening the output, so nothing is written. 4-byte addressing is a later
+    # increment; until then the effective dump ceiling is the 16 MiB reach.
+    if length > 0 and addr + length > _ADDR_24BIT_REACH:
+        raise ProbeError(
+            f"spi dump: range 0x{addr:x}..0x{addr + length - 1:x} exceeds the 24-bit address reach "
+            f"(0x{ADDR_24BIT_MAX:06x}); 4-byte addressing is not supported yet")
 
     pw = PcapWriter(pcap_path, DLT_USER_PROBE_SPI) if pcap_path else None
     written = 0

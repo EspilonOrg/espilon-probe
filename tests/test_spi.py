@@ -207,6 +207,48 @@ def test_spi_dump_length_ceiling_refused():
     assert "exceeds the client ceiling" in str(ei.value)
 
 
+def test_spi_read_over_ceiling_length_refused():
+    # A single-shot `spi read --len` is not chunked, so an over-large len (e.g. 0x40000000 = 1 GiB)
+    # would clock a gigabyte over USB. It is refused before it can reach the backend; a valid len
+    # still round-trips. NEGATIVE test for the unbounded-read fix.
+    from espilon_probe.protocols import spi
+
+    class _B:
+        def __init__(self):
+            self.calls = []
+
+        def op(self, verb, **k):
+            self.calls.append((verb, k))
+            return {"data": (b"\x00" * k["len"]).hex()}
+
+    b = _B()
+    with pytest.raises(ProbeError) as ei:
+        spi.read(b, 0, spi.READ_MAX_BYTES + 1)
+    assert "exceeds the single-read ceiling" in str(ei.value)
+    assert b.calls == []                       # refused before ever reaching the backend
+    # a valid length still works and reaches the backend
+    res = spi.read(b, 0, 16)
+    assert len(bytes.fromhex(res["data"])) == 16
+    assert b.calls == [("spi.read", {"addr": 0, "len": 16, "cs": 0})]
+
+
+def test_spi_dump_over_24bit_reach_refused_before_writing(tmp_path):
+    # A dump range past the 24-bit address reach (0xFFFFFF) used to fail MID-LOOP at 16 MiB, leaving
+    # a partial file. It must now refuse UP FRONT, before any file is opened, naming the 4-byte gap.
+    # NEGATIVE test for the partial-file fix.
+    from espilon_probe.protocols import spi
+
+    class _B:
+        def op(self, *a, **k):
+            raise AssertionError("backend must not be called for an out-of-reach dump")
+
+    out = tmp_path / "flash.bin"
+    with pytest.raises(ProbeError) as ei:
+        spi.dump(_B(), spi.DUMP_MAX_BYTES, str(out), addr=0)   # 32 MiB from 0 -> past the 16 MiB reach
+    assert "4-byte addressing is not supported yet" in str(ei.value)
+    assert not out.exists()                    # no partial file left on disk
+
+
 def test_spi_read_non_positive_length_refused():
     # A single-shot `spi read --len` must be positive; a zero/negative length is refused before
     # it can reach the backend (matches the bound `spi dump` already enforces).
