@@ -199,26 +199,61 @@ def _spawn_daemon(medium: str, endpoint: str, baud: int, info_path: str) -> int:
            "--medium", medium, "--endpoint", endpoint,
            "--listen", "127.0.0.1:0", "--baud", str(baud),
            "--announce", info_path, "--idle-timeout", str(_idle_timeout())]
+    # The child prints its actual failure reason to stderr (a missing [ftdi] extra, an
+    # unimplemented medium, a bad target). Discarding it to devnull leaves the operator with only
+    # "exited before announcing (code 1)", never the actionable line. Capture stderr to a temp file
+    # so the reason can be surfaced on failure. On success the daemon is detached and long-lived, so
+    # the path is unlinked (the inode survives on the daemon's open fd and auto-reaps when it exits).
     devnull = open(os.devnull, "wb")
+    errf = tempfile.NamedTemporaryFile(prefix="probe-bridge-", suffix=".err", delete=False)
     try:
-        proc = subprocess.Popen(cmd, stdout=devnull, stderr=devnull,
+        proc = subprocess.Popen(cmd, stdout=devnull, stderr=errf,
                                 stdin=subprocess.DEVNULL, start_new_session=True,
                                 env=_child_env())
     finally:
         devnull.close()
+        errf.close()
+
+    def _cleanup_errfile() -> None:
+        try:
+            os.unlink(errf.name)
+        except OSError:
+            pass
 
     deadline = time.monotonic() + _SPAWN_READY_TIMEOUT
     while time.monotonic() < deadline:
         if proc.poll() is not None:
+            reason = _last_stderr_line(errf.name)
+            _cleanup_errfile()
+            detail = f": {reason}" if reason else ""
             raise RuntimeError(
                 f"loopback {medium} bridge for {endpoint!r} exited before announcing "
-                f"(code {proc.returncode})")
+                f"(code {proc.returncode}){detail}")
         port = _connect_existing(info_path)
         if port is not None:
+            _cleanup_errfile()
             return port
         time.sleep(0.02)
     try:
         proc.terminate()                                 # unhealthy: best-effort teardown
     except Exception:
         pass
-    raise RuntimeError(f"loopback {medium} bridge for {endpoint!r} did not announce a port in time")
+    reason = _last_stderr_line(errf.name)
+    _cleanup_errfile()
+    detail = f": {reason}" if reason else ""
+    raise RuntimeError(
+        f"loopback {medium} bridge for {endpoint!r} did not announce a port in time{detail}")
+
+
+def _last_stderr_line(path: str) -> str:
+    """The last non-empty line the spawned daemon wrote to its captured stderr, or "" if none.
+
+    Used to surface the child's actual failure reason (the install/deferred hint it printed) in the
+    launcher's error. Best-effort and non-fatal: any read problem yields "" rather than masking the
+    original spawn failure with an IO traceback."""
+    try:
+        with open(path, "r", errors="replace") as fh:
+            lines = [ln.strip() for ln in fh.read().splitlines() if ln.strip()]
+    except OSError:
+        return ""
+    return lines[-1] if lines else ""
